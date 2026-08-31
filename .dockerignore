@@ -1,0 +1,8 @@
+# nginx 镜像构建上下文过滤（context = 项目根）
+# 注意：client/dist 必须保留（nginx/Dockerfile 要 COPY）
+**/node_modules
+**/logs
+**/uploads
+.env
+server/.env
+npm-debug.log*

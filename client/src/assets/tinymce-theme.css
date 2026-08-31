@@ -1,0 +1,254 @@
+/* ====== SoulsGuide — TinyMCE 编辑器主题覆盖（D22 9.2-12） ======
+ * oxide-dark skin 是硬编码色值（无 --tox-* 变量体系），无法直接主题化。
+ * 此文件在主文档中覆盖 .tox 各 UI 类，全部使用 :root 设计变量
+ * （--bg-card/--border-subtle/--amber/--text-* 等），
+ * 因此暗色/亮色（html.light-theme）自动跟随，无需重建编辑器。
+ * 皮肤在 Write.vue 中固定为 oxide-dark，颜色全部由此文件接管。
+ * 注意：选择器需与 skin.min.css 同特异性或更高，且 import 顺序在其之后（Write.vue 已保证）。
+ */
+
+/* ── 外框（.tox 与 .tox-tinymce 在同一元素上，用连写选择器） ── */
+.tox.tox-tinymce {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.tox.tox-fullscreen {
+  background: var(--bg-deep);
+}
+
+/* ── 头部 / 工具栏 ── */
+/* 坑：skin 的 header 背景规则是 .tox:not(.tox-tinymce-inline) .tox-editor-header（特异性 0,3,0），
+   普通 .tox .tox-editor-header（0,2,0）压不过 → 镜像同款选择器再叠 .tox（0,4,0）。 */
+.tox.tox:not(.tox-tinymce-inline) .tox-editor-header {
+  background: var(--bg-card);
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+.tox .tox-toolbar-overlord,
+.tox .tox-toolbar__primary {
+  background: var(--bg-card);
+}
+.tox .tox-toolbar-overlord {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tox .tox-toolbar__group:not(:last-of-type)::after,
+.tox .tox-toolbar__divider {
+  border-color: var(--border-subtle);
+}
+
+/* ── 工具栏按钮（skin 默认 background #222f3e/#2f4055 硬编码深色，必须覆盖） ── */
+.tox .tox-tbtn {
+  background: transparent;
+  color: var(--text-secondary);
+}
+.tox .tox-tbtn svg {
+  fill: var(--text-secondary);
+}
+.tox .tox-tbtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.tox .tox-tbtn:hover svg {
+  fill: var(--text-primary);
+}
+/* 激活态（设计：amber 微光底 + 琥珀色，同 .nav-item.active） */
+.tox .tox-tbtn--enabled,
+.tox .tox-tbtn.tox-tbtn--enabled:focus,
+.tox .tox-tbtn.tox-tbtn--enabled:hover {
+  background: var(--amber-glow);
+  color: var(--amber);
+}
+.tox .tox-tbtn--enabled svg,
+.tox .tox-tbtn--enabled:focus svg,
+.tox .tox-tbtn--enabled:hover svg {
+  fill: var(--amber);
+}
+.tox .tox-tbtn:focus:not(.tox-tbtn--disabled) {
+  background: transparent;
+  outline: 1px solid var(--amber);
+}
+/* disabled 态：skin 默认深色底 + 白图标（亮色下不可见） */
+.tox .tox-tbtn:disabled,
+.tox .tox-tbtn:disabled:hover,
+.tox .tox-tbtn--disabled,
+.tox .tox-tbtn--disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+.tox .tox-tbtn:disabled svg,
+.tox .tox-tbtn:disabled:hover svg,
+.tox .tox-tbtn--disabled svg,
+.tox .tox-tbtn--disabled:hover svg {
+  fill: var(--text-muted);
+}
+/* 表格对话框 number-input（skin 深色底） */
+.tox .tox-number-input,
+.tox .tox-number-input button:focus,
+.tox .tox-number-input button:hover,
+.tox .tox-number-input input:hover,
+.tox .tox-number-input:focus:not(:active) > .tox-input-wrapper,
+.tox .tox-number-input:focus:not(:active) > button {
+  background: var(--bg-deep);
+}
+/* 表格边框色 swatches picker（skin 深色 hover + 白图标） */
+.tox .tox-swatches__picker-btn:hover {
+  background: var(--bg-hover);
+}
+.tox .tox-swatches__picker-btn svg {
+  fill: var(--text-secondary);
+}
+/* blocks 下拉（bespoke select）：常显浅底（亮色下对应 --bg-hover） */
+.tox .tox-tbtn--bespoke,
+.tox .tox-tbtn--bespoke:focus {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.tox .tox-tbtn--bespoke .tox-tbtn__select-label {
+  color: var(--text-secondary);
+}
+.tox .tox-tbtn--bespoke:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.tox .tox-tbtn--bespoke:hover .tox-tbtn__select-label {
+  color: var(--text-primary);
+}
+
+/* ── 下拉菜单（blocks 等） ── */
+.tox .tox-menu,
+.tox .tox-collection--list .tox-collection__group {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+}
+.tox .tox-collection__item {
+  color: var(--text-secondary);
+}
+.tox .tox-collection__item--state-hover,
+.tox .tox-collection__item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.tox .tox-collection__item--active {
+  background: var(--amber-glow);
+  color: var(--amber);
+}
+.tox .tox-collection__item--enabled,
+.tox .tox-collection__item--enabled:hover {
+  color: var(--amber);
+}
+.tox .tox-collection__item--enabled .tox-collection__item-icon svg,
+.tox .tox-collection__item--enabled .tox-collection__item-icon svg path {
+  fill: var(--amber);
+}
+.tox .tox-collection__item-icon svg {
+  fill: var(--text-secondary);
+}
+
+/* ── 对话框（图片 / 链接） ── */
+.tox .tox-dialog,
+.tox .tox-dialog__header,
+.tox .tox-dialog__footer {
+  background: var(--bg-card);
+}
+.tox .tox-dialog {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.tox .tox-dialog__header {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tox .tox-dialog__footer {
+  border-top: 1px solid var(--border-subtle);
+}
+.tox .tox-dialog__title {
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+.tox .tox-label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+/* 输入框 */
+.tox .tox-textfield,
+.tox .tox-textarea,
+.tox .tox-listbox,
+.tox .tox-selectfield select {
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+}
+.tox .tox-textfield:focus,
+.tox .tox-textarea:focus,
+.tox .tox-listbox:focus,
+.tox .tox-selectfield select:focus {
+  border-color: var(--amber);
+  outline: none;
+}
+.tox .tox-listbox__select-label {
+  color: var(--text-primary);
+}
+.tox .tox-listbox__select-chevron svg {
+  fill: var(--text-muted);
+}
+/* 按钮：主（amber，同 .btn-main）/ 次（卡片底，同 .btn-sub） */
+.tox .tox-button {
+  background: var(--amber);
+  color: var(--on-amber);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+.tox .tox-button:hover:not(:disabled) {
+  background: var(--amber-dim);
+  color: var(--on-amber);
+}
+.tox .tox-button--secondary {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+}
+.tox .tox-button--secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/* 复选框（对话框内） */
+.tox .tox-checkbox__icons .tox-checkbox-icon__checked svg,
+.tox .tox-checkbox__icons .tox-checkbox-icon__checked svg path {
+  fill: var(--amber);
+}
+.tox .tox-checkbox__icons .tox-checkbox-icon__unchecked svg {
+  fill: var(--text-muted);
+}
+.tox .tox-checkbox__input:checked + .tox-checkbox__icons .tox-checkbox-icon__checked svg {
+  fill: var(--amber);
+}
+
+/* ── 状态栏 ── */
+.tox .tox-statusbar {
+  background: var(--bg-card);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-body);
+}
+.tox .tox-statusbar__path-item {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.tox .tox-statusbar__wordcount {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+/* ── 代码视图（code 插件） ── */
+.tox .tox-codemirror-wrap,
+.tox .tox-code-view-wrap {
+  background: var(--bg-deep);
+}
+.tox .tox-code-view textarea {
+  color: var(--text-primary);
+  font-family: inherit;
+}

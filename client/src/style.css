@@ -1,0 +1,515 @@
+/* ====== SoulsGuide — 直接来自首页原型 ====== */
+:root {
+  --bg-deep: #0a0e14;
+  --bg-main: #14191e;
+  --bg-card: #1a1f26;
+  --bg-sidebar: #0d1117;
+  --bg-hover: #1e242c;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(232, 168, 56, 0.25);
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --amber: #e8a838;
+  --amber-dim: #b8861e;
+  --amber-glow: rgba(232, 168, 56, 0.12);
+  --on-amber: #1a1a0a; /* amber 主色上的深色文字/图标（2026-08-16 样式统一：收敛硬编码 #1a1a0a） */
+  --cyan: #3b9db5;
+  --red: #c44b4b;
+  --green: #5a9e6f;
+  --sidebar-w: 220px;
+  --font-display: 'Cinzel', 'Times New Roman', serif;
+  --font-body: 'Inter', -apple-system, 'Noto Sans SC', 'PingFang SC', sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+body {
+  font-family: var(--font-body);
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+button {
+  cursor: pointer;
+  font-family: inherit;
+  border: none;
+  outline: none;
+  background: none;
+}
+ul {
+  list-style: none;
+}
+img,
+svg {
+  display: block;
+}
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+}
+
+/* ====== LAYOUT ====== */
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ====== SIDEBAR (Desktop only) ====== */
+.sidebar {
+  display: none;
+}
+@media (min-width: 768px) {
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--sidebar-w);
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-subtle);
+    padding: 24px 0;
+    z-index: 100;
+    overflow-y: auto;
+  }
+}
+.sidebar-logo {
+  padding: 0 20px 28px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 20px;
+  cursor: pointer;
+}
+.sidebar-logo h1 {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: var(--amber);
+  text-shadow: 0 0 30px var(--amber-glow);
+  margin: 0;
+}
+.sidebar-logo span {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+.sidebar-nav {
+  flex: 1;
+  padding: 0 12px;
+}
+.nav-group {
+  padding: 14px 12px 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+.nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.nav-item.active {
+  background: var(--amber-glow);
+  color: var(--amber);
+  box-shadow: inset 0 0 0 1px rgba(232, 168, 56, 0.2);
+}
+.nav-item svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.nav-badge {
+  margin-left: auto;
+  background: var(--red);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  min-width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  padding: 0 5px;
+}
+.sidebar-footer {
+  padding: 16px 20px 0;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: auto;
+}
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.user-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--amber-dim), var(--amber));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--bg-deep);
+  flex-shrink: 0;
+}
+.user-info {
+  font-size: 0.78rem;
+  min-width: 0;
+}
+.user-info .name {
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-info .role {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.sidebar-login-btn {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(232, 168, 56, 0.15);
+  color: var(--amber);
+  border: 1px solid rgba(232, 168, 56, 0.3);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.sidebar-login-btn:hover {
+  background: rgba(232, 168, 56, 0.25);
+}
+
+/* ====== MAIN ====== */
+.main {
+  flex: 1;
+  padding: 12px 14px 90px;
+  min-height: 100vh;
+  max-width: 100%;
+}
+@media (min-width: 768px) {
+  .main {
+    margin-left: var(--sidebar-w);
+    padding: 28px 32px 100px;
+    max-width: none;
+  }
+}
+
+/* ====== ARTICLE FEED ====== */
+.article-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@media (min-width: 768px) {
+  .article-feed {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+}
+
+/* ====== MOBILE BOTTOM NAV ====== */
+.mobile-nav {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-sidebar);
+  border-top: 1px solid var(--border-subtle);
+  padding: 4px 0;
+  z-index: 100;
+}
+@media (min-width: 768px) {
+  .mobile-nav {
+    display: none;
+  }
+}
+.mobile-nav-items {
+  display: flex;
+}
+.mobile-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  font-weight: 500;
+  transition: color var(--transition-fast);
+  cursor: pointer;
+  position: relative;
+}
+.mobile-nav-item.active {
+  color: var(--amber);
+}
+.mobile-nav-item svg {
+  width: 22px;
+  height: 22px;
+}
+.nav-dot {
+  position: absolute;
+  top: 3px;
+  right: calc(50% - 14px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+/* ====== MOBILE HEADER ====== */
+.mobile-header {
+  display: block;
+  padding: 12px 16px;
+  background: var(--bg-sidebar);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+@media (min-width: 768px) {
+  .mobile-header {
+    display: none;
+  }
+}
+.mobile-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mobile-header h2 {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  color: var(--amber);
+  text-shadow: 0 0 20px var(--amber-glow);
+  margin: 0;
+  cursor: pointer;
+}
+
+/* mobile only */
+.main--nopad {
+  margin-left: 0 !important;
+  padding: 0 !important;
+}
+.sub-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 49;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  height: 44px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sub-back {
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 1.2rem;
+}
+
+/* ====== 白天模式 ====== */
+:root.light-theme {
+  --bg-deep: #f5f0e8;
+  --bg-main: #ede6d8;
+  --bg-card: #e8e0d0;
+  --bg-sidebar: #ede6d8;
+  --bg-hover: #dfd6c4;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --text-primary: #2c2416;
+  --text-secondary: #6b5d4f;
+  --text-muted: #8c7e72;
+  --amber: #d4892a;
+  --amber-dim: #b0701e;
+  --amber-glow: rgba(212, 137, 42, 0.12);
+  --on-amber: #1a1a0a;
+  --cyan: #5a7d9a;
+  --red: #b23b2e;
+  --green: #5a8a6a;
+  color-scheme: light;
+}
+
+/* 白天模式全局覆盖 — 对所有硬编码暗色的元素生效 */
+:root.light-theme body {
+  background: var(--bg-deep);
+  color: var(--text-primary);
+}
+:root.light-theme .sidebar,
+:root.light-theme .mobile-header,
+:root.light-theme .mobile-nav {
+  background: var(--bg-sidebar);
+  border-color: var(--border-subtle);
+}
+:root.light-theme .nav-item {
+  color: var(--text-secondary);
+}
+:root.light-theme .nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+:root.light-theme .nav-item.active {
+  background: var(--amber-glow);
+  color: var(--amber);
+}
+:root.light-theme .main {
+  background: var(--bg-deep);
+}
+:root.light-theme .sidebar-logo h1 {
+  color: var(--amber);
+}
+:root.light-theme .mobile-header h2 {
+  color: var(--amber);
+}
+:root.light-theme .sidebar-footer {
+  border-color: var(--border-subtle);
+}
+:root.light-theme .user-info .name {
+  color: var(--text-primary);
+}
+:root.light-theme .bottombar {
+  background: var(--bg-sidebar);
+  border-color: var(--border-subtle);
+}
+:root.light-theme .auth-card {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+}
+:root.light-theme .auth-input {
+  background: var(--bg-deep);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+:root.light-theme .auth-label {
+  color: var(--text-secondary);
+}
+:root.light-theme .stat-num {
+  color: var(--text-primary);
+}
+:root.light-theme .fn-btn {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+:root.light-theme .fn-btn:hover {
+  background: var(--bg-hover);
+}
+:root.light-theme .ts-card {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+}
+:root.light-theme .ts-option,
+:root.light-theme .ts-cancel {
+  color: var(--text-primary);
+}
+
+/* 文章详情页 */
+:root.light-theme .content-area {
+  background: var(--bg-card);
+}
+:root.light-theme .content-area,
+:root.light-theme .content-area div {
+  color: var(--text-primary);
+}
+:root.light-theme .bottombar {
+  background: var(--bg-sidebar);
+}
+:root.light-theme .comment-input-wrap {
+  background: var(--bg-card);
+}
+:root.light-theme .comment-input-wrap input {
+  color: var(--text-primary);
+}
+:root.light-theme .comment-input-wrap input::placeholder {
+  color: var(--text-muted);
+}
+:root.light-theme .detail-page {
+  background: var(--bg-deep);
+}
+:root.light-theme .action-num {
+  color: var(--text-muted);
+}
+:root.light-theme .meta {
+  color: var(--text-muted);
+}
+/* 写攻略 + 管理后台页面（:not(.tox *) 排除 TinyMCE 编辑器内部控件——其配色由 tinymce-theme.css 接管） */
+:root.light-theme input[type='text']:not(.tox *),
+:root.light-theme input[type='password']:not(.tox *),
+:root.light-theme textarea:not(.tox *),
+:root.light-theme select:not(.tox *) {
+  background: var(--bg-card) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+:root.light-theme input:not([type]):not(.tox *),
+:root.light-theme input[type='date']:not(.tox *) {
+  background: var(--bg-card) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+:root.light-theme input:not(.tox *)::placeholder,
+:root.light-theme textarea:not(.tox *)::placeholder {
+  color: var(--text-muted) !important;
+}
+
+/* 全局按钮和输入框跟随主题（排除 TinyMCE 按钮：:not(.tox *)） */
+:root.light-theme button:not(.notify-tab):not(.game-tab):not(.action-item):not(.tox *) {
+  color: var(--text-primary);
+}
+/* 2026-08-16 样式统一：以下「属性选择器匹配内联样式字符串」的 hack 段已删除——
+ * 依赖它的硬编码内联色值（#1A1F26/#0D1117/transparent/rgba(255…)）已全部迁移为 scoped class + CSS 变量 */
