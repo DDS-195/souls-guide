@@ -1,0 +1,10 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>攻略体验隔离验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h,ref} from 'vue';import {createRouter,createMemoryHistory,RouterView} from 'vue-router';import {createPinia} from 'pinia';
+import PostBody from './src/components/PostBody.vue';import Home from './src/views/Home.vue';import {gameApi,postApi} from './src/api';import './src/style.css';
+const posts=[{id:1,title:'凝目戈夫开荒打法',game_id:1,game_name:'黑暗之魂',category:'BOSS攻略',tags:['开荒','翻滚'],nickname:'攻略验收',created_at:'2026-09-30'}, {id:2,title:'一周目路线',game_id:1,game_name:'黑暗之魂',category:'新手入门',tags:['开荒'],nickname:'攻略验收',created_at:'2026-09-30'}];
+gameApi.getList=async()=>({data:[{id:1,name:'黑暗之魂',status:1},{id:2,name:'艾尔登法环',status:1}]});
+postApi.getList=async params=>{const list=posts.filter(p=>(!params.game_id||p.game_id==params.game_id)&&(!params.category||p.category==params.category)&&(!params.keyword||p.title.includes(params.keyword)||p.tags.some(t=>t.includes(params.keyword))));return {data:{list,total:list.length}}};
+const post={cover:null,content:'<h2>准备与装备</h2><p>先确认装备负重与翻滚距离。</p><h2>第一阶段</h2><p>观察攻击结束后的空档，先保留耐力，再选择输出。</p><h3>常见失误</h3><p>不要连续贪刀。</p><h2>第二阶段</h2><p>新的招式需要重新确认安全距离。</p>',media:[{type:'video',url:'http://116.62.158.251/uploads/videos/sg-demo-20260914-v1/guide-02.mp4'}],guide_info:{summary:'先保留耐力，观察招式结束后的空档再输出。',game_version:'作者确认的适用版本',prerequisites:'一周目；可稳定翻滚的装备负重',spoiler:'minor',video_chapters:[{seconds:0,title:'准备'},{seconds:2,title:'操作示意'},{seconds:999,title:'越界检查'}]}};
+const View={setup(){const show=ref(false);return()=>h('main',{style:'max-width:900px;padding:16px;margin:auto'},[h('button',{onClick:()=>show.value=!show.value},show.value?'查看检索':'查看阅读'),show.value?h(PostBody,{post}):h(RouterView)])}};
+const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:Home}]});const app=createApp(View);app.use(createPinia()).use(router);await router.push('/');await router.isReady();app.mount('#app');
+</script></body></html>

@@ -33,8 +33,25 @@ export interface PageQuery {
 export type UserRole = 'user' | 'creator' | 'admin'
 export type ApplyStatus = 'none' | 'pending' | 'approved' | 'rejected'
 
+export interface CreatorApplication {
+  id: number
+  user_id: number
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  submitted_at: string | null
+  reviewed_at: string | null
+  reviewer_username: string | null
+  reject_reason: string | null
+  legacy: number
+  username: string
+  nickname: string | null
+  avatar: string | null
+  user_status: number
+}
+
 /** 用户完整信息（GET /users/me） */
 export interface User {
+  management_version?: number
   id: number
   username: string
   nickname: string | null
@@ -44,6 +61,11 @@ export interface User {
   birthday: string | null
   role: UserRole
   apply_status: ApplyStatus
+  apply_reason?: string | null
+  application?: Pick<
+    CreatorApplication,
+    'id' | 'reason' | 'status' | 'submitted_at' | 'reviewed_at' | 'reject_reason' | 'legacy'
+  > | null
   status: number
   created_at?: string
   updated_at?: string
@@ -76,6 +98,8 @@ export interface FollowUser {
 // ================= 游戏（3.2 games） =================
 
 export interface Game {
+  version: number
+  post_count?: number
   id: number
   name: string
   cover: string | null
@@ -97,9 +121,25 @@ export interface MediaItem {
   type: 'image' | 'video'
   sort_order: number
 }
+export interface VideoChapter { seconds: number; title: string }
+export interface GuideInfo {
+  summary: string
+  game_version: string
+  prerequisites: string
+  spoiler: 'none' | 'minor' | 'major'
+  video_chapters: VideoChapter[]
+}
 
 /** 文章（列表/详情，列表无 content/media） */
 export interface Post {
+  /** Private management/review endpoints only: revision and canonical visibility. */
+  is_revision?: boolean
+  public_status?: PostStatus
+  /** Public list summary: whether an associated video exists; no video URL or preload. */
+  has_video?: boolean
+  guide_info?: GuideInfo | null
+  content_version?: number
+  submitted_at?: string | null
   id: number
   title: string
   content?: string
@@ -111,21 +151,38 @@ export interface Post {
   reject_reason?: string | null
   view_count: number
   like_count: number
+  /** 详情接口返回；列表接口可省略。 */
+  favorite_count?: number
   comment_count: number
   user_id: number
   username?: string
+  nickname?: string | null
   avatar?: string | null
   tags?: string[]
   media?: MediaItem[]
   created_at?: string
   updated_at?: string
+  published_at?: string | null
 }
 
 /** 我的文章列表项（GET /posts/my/list，方案 A 起每项含 content/tags/media（video）——编辑回填数据源） */
 export interface MyPost extends Post {
+  content_version: number
   content: string
   tags: string[]
   media: MediaItem[]
+}
+
+export interface ReviewPost extends MyPost {
+  content_version: number
+  reviews: Array<{
+    id: number
+    content_version: number
+    reviewer_username: string
+    decision: 'published' | 'rejected'
+    reason: string | null
+    created_at: string
+  }>
 }
 
 /** 文章互动状态（GET /posts/:id/status，D17） */
@@ -137,6 +194,7 @@ export interface PostStatusResult {
 
 /** 文章创建/编辑 body（4.1 文章模块，status 不接受请求体，传了也无副作用） */
 export interface PostPayload {
+  guide_info?: GuideInfo | null
   title: string
   content: string
   game_id: number
@@ -161,9 +219,12 @@ export interface PostListQuery extends PageQuery {
 // ================= 评论（3.9 comments，嵌套树） =================
 
 export interface Comment {
+  reply_count?: number
+  focus_path?: boolean
+  is_deleted?: number
   id: number
   content: string
-  user_id: number
+  user_id: number | null
   post_id: number
   parent_id: number | null
   created_at?: string
@@ -178,6 +239,9 @@ export interface Comment {
 export type NotificationType = 'like' | 'comment' | 'reply' | 'follow' | 'audit' | 'system'
 
 export interface Notification {
+  context_title?: string | null
+  comment_id?: number | null
+  target_available?: number
   id: number
   receiver_id: number
   sender_id: number | null
@@ -195,6 +259,7 @@ export interface Notification {
 /** 通知分页响应（4.1：分页字段之外额外含 unread 未读数） */
 export interface NotificationPage extends PageResult<Notification> {
   unread: number
+  cutoff_id: number
 }
 
 // ================= 举报（3.7 reports） =================
@@ -217,7 +282,7 @@ export interface Report {
 
 // ================= 公告（3.13 announcements） =================
 
-export type AnnouncementStatus = 'draft' | 'published' | 'archived'
+export type AnnouncementStatus = 'draft' | 'published' | 'archived' | 'deleted'
 
 export interface Announcement {
   id: number
@@ -225,6 +290,12 @@ export interface Announcement {
   content: string
   author_id: number
   status: AnnouncementStatus
+  version: number
+  source_id: number | null
+  author_username?: string
+  is_read?: 0 | 1
+  published_at?: string | null
+  archived_at?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -232,6 +303,9 @@ export interface Announcement {
 // ================= 操作日志（3.14 operation_logs） =================
 
 export interface OperationLog {
+  request_id?: string | null
+  event_key?: string | null
+  metadata?: Record<string, unknown> | null
   id: number
   admin_id: number
   admin_username: string
@@ -248,19 +322,109 @@ export interface OperationLog {
 
 // ================= 统计 =================
 
-/** 创作者统计（GET /creator/stats，4.1 创作者统计契约） */
+export type CreatorRankMetric = 'pv' | 'uv' | 'likes_added' | 'favorites_added' | 'comments_added' | 'engagement_rate'
+
+export type CreatorTrendMetric = 'pv' | 'uv' | 'likes_net' | 'favorites_net' | 'comments_net' | 'followers_net'
+
+export interface CreatorStatsQuery {
+  from?: string
+  to?: string
+  game_id?: number
+  category?: string
+  post_id?: number
+  rank_by?: CreatorRankMetric
+}
+
+export interface MetricComparison {
+  current: number
+  previous: number
+  /** null 表示上一周期为 0，无法计算百分比。互动率字段表示百分点差。 */
+  change_percent: number | null
+}
+
+export interface CreatorStatsPeriod {
+  pv: number
+  uv: number
+  likes_added: number
+  likes_removed: number
+  likes_net: number
+  favorites_added: number
+  favorites_removed: number
+  favorites_net: number
+  comments_added: number
+  comments_removed: number
+  comments_net: number
+  followers_added: number
+  followers_removed: number
+  followers_net: number
+  engaged_users: number
+  engagement_rate: number
+}
+
+export interface CreatorStatsTrend {
+  date: string
+  pv: number
+  uv: number
+  likes_added: number
+  likes_removed: number
+  likes_net: number
+  favorites_added: number
+  favorites_removed: number
+  favorites_net: number
+  comments_added: number
+  comments_removed: number
+  comments_net: number
+  followers_added: number
+  followers_removed: number
+  followers_net: number
+}
+
+/** 创作者统计 v2：当前快照与周期事件严格分离。 */
 export interface CreatorStats {
-  overview: {
-    post_count: number
-    view_count: number
-    like_count: number
-    comment_count: number
-    favorite_count: number
-    follower_count: number
+  meta: {
+    from: string
+    to: string
+    timezone: 'Asia/Shanghai'
+    generated_at: string
+    data_since: string
+    has_complete_history: boolean
+    definitions_version: '2.1'
+    filters: { game_id: number | null; category: string | null; post_id: number | null; rank_by: CreatorRankMetric }
   }
-  trend: { date: string; views: number; likes: number; comments: number }[]
-  top_posts: { id: number; title: string; view_count: number; like_count: number }[]
-  category_dist: { category: string; count: number }[]
+  current: {
+    published_posts: number
+    legacy_lifetime_views: number
+    active_likes: number
+    active_favorites: number
+    active_comments: number
+    followers: number
+  }
+  period: CreatorStatsPeriod
+  comparison: Record<CreatorTrendMetric | 'engagement_rate', MetricComparison>
+  trend: CreatorStatsTrend[]
+  top_posts: Array<{
+    id: number
+    title: string
+    published_at: string | null
+    pv: number
+    uv: number
+    likes_added: number
+    favorites_added: number
+    comments_added: number
+    engaged_users: number
+    engagement_rate: number
+  }>
+  category_performance: Array<{
+    category: string
+    post_count: number
+    pv: number
+    uv: number
+    average_uv: number
+    likes_added: number
+    favorites_added: number
+    comments_added: number
+    engagement_rate: number
+  }>
 }
 
 /** 全站统计（GET /admin/stats） */

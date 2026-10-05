@@ -7,8 +7,17 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
+  connectTimeout: 3000,
+  queueLimit: 100,
   // 2026-08-13 修复（P2-4）：固定东八区，DATETIME 读写不再依赖部署机时区（本地/容器行为一致）
   timezone: '+08:00',
+})
+
+// mysql2 的 timezone 负责 DATETIME 序列化；显式设置数据库会话时区，保证 NOW()/CURDATE()/DATE() 也按东八区计算。
+pool.on('connection', (connection) => {
+  connection.query("SET time_zone = '+08:00'", (err) => {
+    if (err) console.error('[mysql pool] 设置会话时区失败:', err.message)
+  })
 })
 
 // 2026-08-13 修复（P1-6）：监听空闲连接错误——MySQL 重启/断网时空闲连接 emit 'error'，

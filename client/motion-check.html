@@ -1,0 +1,4 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>动效本地验收</title></head><body><div id="app"></div><script type="module">
+import {createApp} from 'vue';import {createRouter,createMemoryHistory} from 'vue-router';import Check from './checks/MotionCheck.vue';import './src/style.css';import './src/assets/motion.css';
+createApp(Check).use(createRouter({history:createMemoryHistory(),routes:[{path:'/',component:{template:'<div />'}}]})).mount('#app');
+</script></body></html>

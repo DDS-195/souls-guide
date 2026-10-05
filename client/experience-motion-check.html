@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>动效隔离验收</title></head><body><div id="app"></div><script type="module">
+import { createApp } from 'vue'
+import { createPinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
+import App from './src/App.vue'
+import Home from './src/views/Home.vue'
+import PostDetail from './src/views/PostDetail.vue'
+import Profile from './src/views/Profile.vue'
+import MyLists from './src/views/MyLists.vue'
+import Notifications from './src/views/Notifications.vue'
+import { useUserStore } from './src/stores/user'
+import { gameApi, postApi, interactApi, userApi, announcementApi } from './src/api'
+import request from './src/utils/request'
+import './src/style.css'
+import './src/assets/motion.css'
+const delay = () => new Promise(resolve => setTimeout(resolve, 160))
+for (const method of ['get','post','put','delete']) request[method] = async () => { throw Error('Unexpected fixture API request') }
+// Fixture-only deletion changes an in-memory array, restored on reload.
+window.confirm = () => true
+const clone = value => JSON.parse(JSON.stringify(value))
+const me = { id: 424243, username: 'motion-review', nickname: '动效验收', role: 'user', status: 1, apply_status: 'none' }
+const games = [{id:1,name:'艾尔登法环'},{id:2,name:'黑暗之魂3'},{id:3,name:'只狼：影逝二度'},{id:4,name:'空分类'}]
+const posts = Array.from({length:9}, (_, index) => ({id:index+1,user_id:9,title:['开荒实用路线：先探索，再挑战强敌','近战配装心得：稳定输出与耐力管理','BOSS招式拆解：找到每一招的安全窗口'][index%3],game_id:index%3+1,game_name:games[index%3].name,category:'BOSS攻略',tags:['开荒','近战'],nickname:'篝火旁的骑士',username:'knight',created_at:'2026-10-03',like_count:12,favorite_count:8,comment_count:2,view_count:156,cover:'/writing-fixture-image.svg',media:[],content:Array.from({length:6},(_,i)=>`<h2>第${i+1}节：${['出发前的准备','观察攻击节奏','装备与耐力','寻找出手机会','常见失误','实战练习'][i]}</h2>${('<p>先保持安全距离，观察招式收尾的停顿。确认耐力足够后再出手，结束攻击后及时回到安全位置。练习时把每一轮攻击作为一个完整的节奏，逐步增加输出。</p>').repeat(4)}`).join(''),guide_info:{summary:'观察招式，保持耐力，在安全窗口出手。',game_version:'当前版本',prerequisites:'一周目开荒',spoiler:'none',video_chapters:[]}}))
+let liked = false, favorited = false, following = false, nextComment = 102
+let comments = [{id:100,post_id:1,user_id:9,nickname:'不贪刀',content:'把耐力留给下一次翻滚，确实更稳。',created_at:'2026-10-03',replies:[],reply_count:0},{id:101,post_id:1,user_id:424243,nickname:me.nickname,content:'先练节奏，再加输出。',created_at:'2026-10-03',replies:[],reply_count:0}]
+gameApi.getList = async () => ({data:clone(games)})
+postApi.getList = async params => { await delay(); const list=posts.filter(p=>!params.game_id||p.game_id==params.game_id).filter(p=>!params.keyword||p.title.includes(params.keyword)); if(params.sort==='hot')list.reverse(); return {data:{list:clone(list),total:list.length}} }
+postApi.getDetail = async id => { await delay(); return {data:clone({...posts.find(p=>p.id==id),comment_count:comments.length})} }
+postApi.getStatus = async () => ({data:{liked,favorited,is_followed:following}})
+postApi.recordView = async () => ({data:{view_count:156}})
+postApi.getComments = async (_id, params) => { await delay(); return {data:{list:clone(params?.parent_id?comments.find(c=>c.id==params.parent_id)?.replies||[]:comments),total:comments.length,page:1}} }
+postApi.like = async id => { await delay(); liked=!liked; const p=posts.find(p=>p.id==id); p.like_count+=liked?1:-1;return {data:{liked,like_count:p.like_count}} }
+postApi.favorite = async id => { await delay(); favorited=!favorited; const p=posts.find(p=>p.id==id);p.favorite_count+=favorited?1:-1;return {data:{favorited,favorite_count:p.favorite_count}} }
+postApi.addComment = async (id,{content}) => { await delay();if(content==='失败')throw Error('模拟提交失败');const item={id:nextComment++,post_id:id,user_id:me.id,nickname:me.nickname,content,created_at:'2026-10-03',replies:[],reply_count:0};comments.push(item);return {data:{id:item.id}} }
+postApi.replyComment = async (id,content) => { await delay();const item={id:nextComment++,post_id:1,user_id:me.id,nickname:me.nickname,content,created_at:'2026-10-03',replies:[],reply_count:0};const parent=comments.find(c=>c.id==id);parent.replies.push(item);parent.reply_count++;return {data:{id:item.id}} }
+postApi.deleteComment = async id => { await delay();comments=comments.filter(c=>c.id!=id);return {data:{comment_count:comments.reduce((total,c)=>total+1+c.replies.length,0)}} }
+interactApi.follow = async () => { await delay();following=!following;return {data:{following}} }
+interactApi.getNotificationSummary = async () => ({data:{unread:0}})
+interactApi.getNotifications = async params => { await delay();const list=['like','comment','reply','follow','audit','system'].filter(type=>!params.type||type===params.type).map((type,index)=>({id:index+1,type,nickname:'篝火旁的骑士',content:'先观察招式，再找安全的出手窗口。',context_title:'开荒实用路线',created_at:'2026-10-03',is_read:1,target_type:'post'}));return {data:{list,total:list.length,cutoff_id:6}} }
+interactApi.getFavorites = async () => ({data:{list:[],total:0}})
+interactApi.getFollowing = async () => ({data:{list:[],total:0}})
+interactApi.getFollowingFeed = postApi.getList
+announcementApi.getLatest = async () => ({data:null})
+userApi.getMe = async () => ({data:me})
+userApi.getProfile = async () => ({data:{...me,following_count:0,follower_count:0}})
+const router = createRouter({history:createMemoryHistory(),routes:[{path:'/',name:'Home',component:Home},{path:'/post/:id',name:'PostDetail',component:PostDetail},{path:'/notifications',name:'Notifications',component:Notifications},{path:'/me/profile',name:'Profile',component:Profile},{path:'/me/following',component:MyLists},{path:'/user/:id',component:{template:'<div />'}}],scrollBehavior(to,from){if(to.path!==from.path&&to.path!=='/')return {top:0}}})
+const pinia=createPinia(),app=createApp(App)
+app.use(pinia).use(router)
+const user=useUserStore(pinia);user.token='isolated-motion-fixture';user.userInfo=me
+await router.push('/');await router.isReady();app.mount('#app')
+</script></body></html>

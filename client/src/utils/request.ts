@@ -1,3 +1,4 @@
+import { safeStorage } from './storage'
 import axios, { type AxiosRequestConfig } from 'axios'
 import { useUserStore } from '@/stores/user'
 import router from '@/router'
@@ -18,12 +19,24 @@ request.interceptors.request.use((config) => {
 
 // 响应拦截器：统一解包 + 错误处理
 request.interceptors.response.use(
-  (res) => res.data,
+  (res) => {
+    const store = useUserStore()
+    const grant = res.headers['x-media-grant']
+    const currentSession = res.config.url !== '/users/login' && store.token && safeStorage.getItem('token') === store.token && res.config.headers.Authorization === `Bearer ${store.token}`
+    if (typeof grant === 'string' && /^[A-Za-z0-9_.-]+$/.test(grant) && currentSession) {
+      document.cookie = `sg_media=${grant}; Path=/uploads; Max-Age=900; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`
+    }
+    return res.data
+  },
   (err) => {
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 && err.config?.url !== '/users/login') {
       const userStore = useUserStore()
-      userStore.logout()
-      router.push('/login')
+      const sentToken = err.config?.headers?.Authorization
+      if (userStore.token && sentToken === `Bearer ${userStore.token}`) {
+        const redirect = router.currentRoute.value.fullPath
+        userStore.logout()
+        if (router.currentRoute.value.path !== '/login') router.push({ path: '/login', query: { redirect } })
+      }
     }
     return Promise.reject(err)
   },

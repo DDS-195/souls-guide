@@ -1,85 +1,75 @@
-# 🔥 SoulsGuide — 魂类游戏攻略社区
+# SoulsGuide — 魂类游戏攻略社区
 
-> 面向魂类游戏玩家（艾尔登法环 / 只狼 / 黑魂等）的图文+视频攻略内容平台，覆盖「创作 → 审核 → 互动」完整业务闭环。
+SoulsGuide 是一个 Vue 3 + Express + MySQL 的图文/视频攻略平台，覆盖创作、审核、发布、互动、通知和管理审计。项目定位是经过多轮工程加固的学习型 MVP，不宣称多机高可用或零停机发布。
 
-**在线 Demo**：[http://116.62.158.251](http://116.62.158.251)
+## 已实现的工程能力
 
----
+- 后端 RBAC、资源所有权校验和文章审核状态机。
+- MySQL 事务与统一锁顺序，覆盖互动计数和复合业务写入。
+- 上传资产所有权/引用模型、孤儿资源回收、图片魔数校验。
+- 5MB 视频分片、断点续传、服务端 MD5、ffprobe 检测和受限并发转码。
+- TinyMCE 桌面端按需加载、移动端轻量编辑、ECharts 按需注册、图片压缩、DOMPurify 富文本消毒和双主题响应式 UI。
+- HTTPS 生产配置、最小权限数据库用户、请求关联 ID、审计与轮转日志。
+- OpenAPI 路由契约、独立测试数据库和 263 项后端回归（真实 HTTP/MySQL/FFmpeg 与故障边界测试）。
 
-## ✨ 项目亮点
+## 目录
 
-- **三层 RBAC 权限体系**：路由守卫 — 动态导航 — 接口鉴权三层防护，内容审核状态机（草稿→待审→发布/驳回）状态流转唯一入口，防越权发布、管理员降级与封禁绕过
-- **并发一致性实战**：并发写入基于 MySQL 事务 + 统一锁顺序（FOR UPDATE），点赞/收藏/关注多用户并发下数据强一致；实测定位并根治 MySQL 死锁（ER_LOCK_DEADLOCK，外键共享锁与排他锁环形等待）
-- **视频分片断点续传**：SparkMD5 文件指纹 + 5MB 切片 3 并发 + 幂等补传，断网仅补缺失分片，支持最高 500MB 视频；服务端 FFmpeg 检测式转码（H.264/≤1080p，无 FFmpeg 环境自动降级）
-- **富文本编辑体验**：TinyMCE 8 深度定制——Canvas 压缩图片转 WebP（15MB 原图实测压至 17KB）、DOMPurify 消毒防 XSS、暗/亮主题自动跟随；全站 CSS 变量双主题设计系统，桌面/移动双端响应式
-- **操作审计体系**：中间件零侵入自动记录 17 类管理操作（无外键快照设计，用户删除后审计保留），三级日志（操作审计/访问/错误堆栈）
-- **工程质量**：147 项零依赖自动化测试（含真实并发用例）全通过；Docker Compose 三容器部署（MySQL/Node/Nginx，内存隔离 + 健康检查链）
-
-## 🛠 技术栈
-
-| 层 | 技术 |
-|---|---|
-| 前端 | Vue 3 · TypeScript · Vite · Pinia · Vue Router · TinyMCE 8 · ECharts 6 · DOMPurify · SparkMD5 |
-| 后端 | Node.js · Express 4 · MySQL 8 · JWT · bcrypt · Multer |
-| 工程 | Docker Compose · Nginx · FFmpeg · ESLint · Prettier · 零依赖测试体系 |
-
-## 🗂 项目结构
-
-```
-souls-guide/
-├── client/          # Vue 3 前端（端口 5173，/api 与 /uploads 代理到后端）
-│   ├── src/         # api / components / composables / router / stores / types / utils / views
-│   └── public/      # favicon + TinyMCE 中文语言包
-├── server/          # Express 后端（端口 3000）
-│   ├── db/          # schema.sql（14 张表）+ seed.sql（admin + 7 游戏）
-│   ├── src/         # routes / controllers / services / middlewares / utils
-│   └── test/        # 8 套件 147 项测试（含并发用例），零依赖 runner
-├── nginx/           # 前端静态 + 反代 /api + uploads 直出（Range 视频拖动）
-└── docker-compose.yml  # 三容器：mysql + server + nginx
+```text
+client/                 Vue 3 + TypeScript 前端
+server/                 Express API、migration、测试与上传目录
+nginx/                  本地/生产 Nginx 配置
+docs/                   仓库内权威文档与 OpenAPI
+ops/                    备份和恢复脚本
+docker-compose.yml      基础三容器编排
+docker-compose.prod.yml HTTPS 生产覆盖
 ```
 
-## 🚀 本地运行
+数据库当前包含 17 张表；升级通过 `server/db/migrations/` 和 `schema_migrations` 管理。
 
-环境要求：Node.js 18+、MySQL 8。
+## 本地开发
+
+要求 Node.js 24 和 MySQL 8；开发热重载使用 `node --watch`，无需 nodemon。
 
 ```bash
-# 1. 初始化数据库
 mysql -u root -p < server/db/schema.sql
-mysql -u root -p < server/db/seed.sql     # 内置 admin（admin / admin123）
+mysql -u root -p < server/db/seed.sql
 
-# 2. 后端（server/.env 配置 DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/JWT_SECRET）
-cd server && npm install && npm run dev   # 端口 3000
+cp server/.env.example server/.env
+cd server && npm ci && npm run dev
 
-# 3. 前端
-cd client && npm install && npm run dev   # 端口 5173
+cd ../client && npm ci && npm run dev
 ```
 
-浏览器访问 http://localhost:5173
+seed 只写入 7 个游戏，不包含公开管理员密码。首次创建管理员时，在后端环境中临时设置满足强度要求的 `ADMIN_INITIAL_PASSWORD`；创建成功后移除该变量。
 
-## 🐳 Docker 部署（生产）
+## 验证
 
 ```bash
-cd client && npm run build                # 构建前端产物（nginx 镜像 COPY）
-cd ..
-docker compose up -d --build              # mysql + server + nginx 三容器
+npm run type-check --prefix client
+npm run lint --prefix client
+npm run build --prefix client
+npm test --prefix server
 ```
 
-- MySQL 首启自动初始化 schema + seed（幂等）
-- FFmpeg 随 server 镜像内置，检测式转码自动启用
-- 上传文件与数据库均卷持久化，容器重建不丢数据
+后端测试会重建并销毁以 `_test` 结尾的独立数据库，不应对开发库或生产库运行逐条清理。
 
-## 🧪 测试
+## Docker HTTPS 部署
+
+复制 `.env.example` 为 `.env` 并替换全部 `CHANGE_ME`，将证书放入 `nginx/certs/`：
 
 ```bash
-cd server && node test/run-all.js
-# 8 个套件 147 项：用户/游戏/文章/互动/管理/媒体/安全/并发（零外部依赖）
+npm ci --prefix client && npm run build --prefix client
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-## 📖 文档
+详细的最小权限账号、旧数据卷升级、迁移、备份和恢复步骤见 [`docs/deployment.md`](./docs/deployment.md)。
 
-- 设计文档（API 契约 + 14 表结构 + 决策记录）
-- 并发与高可用评估文档（方案 / 问题 / 整改路线图）
-- 死锁问题分析与解决文档（复现 → 根因 → 根治全记录）
-- 视频上传问题修复文档（三重缺陷排查档案）
+## 文档与契约
 
-> 项目为个人全栈学习实践（多 AI 协作开发：契约文档管理模块边界与前后端接口对齐）。
+- [文档索引](./docs/README.md)
+- [架构与工程边界](./docs/architecture.md)
+- [部署、迁移与恢复](./docs/deployment.md)
+- [第二次排障整改结果](./docs/remediation-2026-09-02.md)
+- [OpenAPI 3.1](./docs/openapi.json)
+
+历史公网 Demo 使用过明文 HTTP，本 README 不再提供该入口；只有完成 HTTPS、强密码和部署验收后才应重新公开。

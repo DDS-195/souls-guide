@@ -55,7 +55,7 @@ module.exports = async function concurrencySuite() {
   })
 
   // ================= A2：并发 toggle → 行数与计数强一致 =================
-  await test('A2 并发 5 次点赞 → 最终行数=计数=1 且通知数=点赞成功次数', async () => {
+  await test('A2 并发 5 次点赞 → 最终行数=计数=1 且窗口内通知去重', async () => {
     const pid = await mkPost(authorId, { status: 'published' })
     const rs = await Promise.all(Array.from({ length: 5 }, () => http('POST', `/posts/${pid}/like`, { token: readerTok })))
     H.assert.ok(rs.every(r => r.status === 200), '并发点赞均 200')
@@ -66,10 +66,10 @@ module.exports = async function concurrencySuite() {
     const [[p]] = await pool.execute('SELECT like_count FROM posts WHERE id=?', [pid])
     H.assert.equal(lk.c, 1, '点赞行应为 1')
     H.assert.equal(p.like_count, 1, `like_count 应为 1（实际 ${p.like_count}）`)
-    // 通知一致性：每点赞成功一次发一条（设计 4.3），取消不发 → 通知数 === 点赞成功次数
+    // 新通知契约：十分钟内同人同文章仅一次提醒，业务 toggle 仍完整计数。
     const [[n]] = await pool.execute('SELECT COUNT(*) c FROM notifications WHERE sender_id=? AND receiver_id=? AND type=? AND target_id=?',
       [readerId, authorId, 'like', pid])
-    H.assert.equal(n.c, trues, `通知应恰 ${trues} 条（实际 ${n.c}）`)
+    H.assert.equal(n.c, 1, '同一窗口内仅一条点赞提醒')
     // 复原（再 toggle 一次取消）
     await http('POST', `/posts/${pid}/like`, { token: readerTok })
   })
@@ -82,7 +82,7 @@ module.exports = async function concurrencySuite() {
     H.assert.equal(fav.c, 0, '4 次 toggle 后收藏行应为 0')
   })
 
-  await test('A2 并发 3 次关注（奇数）→ 最终已关注且通知数=关注成功次数', async () => {
+  await test('A2 并发 3 次关注（奇数）→ 最终已关注且窗口内通知去重', async () => {
     const rs = await Promise.all(Array.from({ length: 3 }, () => http('POST', `/follows/${authorId}`, { token: readerTok })))
     H.assert.ok(rs.every(r => r.status === 200))
     const trues = rs.filter(r => r.data.data.following === true).length
@@ -91,7 +91,7 @@ module.exports = async function concurrencySuite() {
     H.assert.equal(f.c, 1, '3 次 toggle 后关注行应为 1')
     const [[n]] = await pool.execute('SELECT COUNT(*) c FROM notifications WHERE sender_id=? AND receiver_id=? AND type=?',
       [readerId, authorId, 'follow'])
-    H.assert.equal(n.c, trues, `关注通知应恰 ${trues} 条（实际 ${n.c}）`)
+    H.assert.equal(n.c, 1, '同一窗口内仅一条关注提醒')
     await http('POST', `/follows/${authorId}`, { token: readerTok }) // 复原
   })
 
@@ -112,10 +112,10 @@ module.exports = async function concurrencySuite() {
 
   // ================= A4：并发 merge 同 hash =================
   await test('A4 并发 2 次 merge 同 hash → 同一 URL + 文件完整', async () => {
-    const hash = crypto.randomBytes(16).toString('hex')
     const CHUNK = 256 * 1024
     const TOTAL = 2
     const chunks = [crypto.randomBytes(CHUNK), crypto.randomBytes(CHUNK)]
+    const hash = crypto.createHash('md5').update(Buffer.concat(chunks)).digest('hex')
     for (const [i, buf] of chunks.entries()) {
       const form = new FormData()
       form.append('hash', hash)
@@ -137,18 +137,20 @@ module.exports = async function concurrencySuite() {
     const size = fs.statSync(urlToAbs(u1)).size
     H.assert.equal(size, CHUNK * TOTAL, '合并产物字节数应完整')
     // 登记清理（__done__ 目录 + 合并文件）
-    created.dirs.push(urlToAbs(`/uploads/videos/tmp/${hash}`))
+    created.dirs.push(urlToAbs(`/uploads/videos/tmp/${authorId}-${hash}`))
   })
 
   await test('A4 merge 失败后锁释放 → 可重试（缺片 400 后补片重 merge 200）', async () => {
-    const hash = crypto.randomBytes(16).toString('hex')
     const CHUNK = 128 * 1024
     const TOTAL = 2
+    const chunk0 = crypto.randomBytes(CHUNK)
+    const chunk1 = crypto.randomBytes(CHUNK)
+    const hash = crypto.createHash('md5').update(Buffer.concat([chunk0, chunk1])).digest('hex')
     const form = new FormData()
     form.append('hash', hash)
     form.append('index', '0')
     form.append('totalChunks', String(TOTAL))
-    form.append('chunk', new File([crypto.randomBytes(CHUNK)], 'retry.mp4', { type: 'video/mp4' }))
+    form.append('chunk', new File([chunk0], 'retry.mp4', { type: 'video/mp4' }))
     H.assert.equal((await http('POST', '/media/upload/video/chunk', { token: authorTok, form })).status, 200)
     // 第一次 merge：缺片 → 400（锁应随失败释放）
     const fail = await http('POST', '/media/upload/video/merge', { token: authorTok, body: { hash, totalChunks: TOTAL, originalName: 'retry.mp4' } })
@@ -158,11 +160,11 @@ module.exports = async function concurrencySuite() {
     form2.append('hash', hash)
     form2.append('index', '1')
     form2.append('totalChunks', String(TOTAL))
-    form2.append('chunk', new File([crypto.randomBytes(CHUNK)], 'retry.mp4', { type: 'video/mp4' }))
+    form2.append('chunk', new File([chunk1], 'retry.mp4', { type: 'video/mp4' }))
     H.assert.equal((await http('POST', '/media/upload/video/chunk', { token: authorTok, form: form2 })).status, 200)
     const ok = await http('POST', '/media/upload/video/merge', { token: authorTok, body: { hash, totalChunks: TOTAL, originalName: 'retry.mp4' } })
     H.assert.equal(ok.status, 200)
     trackFile(ok.data.data.url)
-    created.dirs.push(urlToAbs(`/uploads/videos/tmp/${hash}`))
+    created.dirs.push(urlToAbs(`/uploads/videos/tmp/${authorId}-${hash}`))
   })
 }

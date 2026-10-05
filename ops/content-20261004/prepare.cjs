@@ -1,0 +1,57 @@
+const fs = require('node:fs')
+const path = require('node:path')
+const assert = require('node:assert/strict')
+const crypto = require('node:crypto')
+const sharp = require('../../server/node_modules/sharp')
+const pack = require('./pack.cjs')
+const posts = [...require('./posts-a.cjs'), ...require('./posts-b.cjs')]
+const generated = require('./generated.json')
+const { normalizeGuideInfo, CATEGORIES } = require('../../server/src/utils/guideInfo')
+const root = path.resolve(__dirname, '../..')
+const output = path.join(root, '.artifacts/content-20261004')
+const assets = path.join(root, 'assets/content-20261004')
+const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex')
+async function main() {
+  assert.equal(pack.games.length, 12)
+  assert.equal(pack.existing.length, 12)
+  assert.equal(posts.length, 24)
+  assert.equal(new Set(generated.map(x => x.id)).size, 24)
+  assert.equal(new Set(posts.map(x => x.title)).size, 24)
+  for (const game of pack.games) assert.equal(posts.filter(x => x.game === game.key).length, 2, game.key)
+  for (const post of [...pack.existing, ...posts]) {
+    const plain = post.content.replace(/<[^>]+>/g, '')
+    assert.ok(plain.length >= 400, `${post.title}: only ${plain.length} chars`)
+    assert.ok(!/<(?:script|iframe)|on\w+=|javascript:|测试帖子|实测\d|\d+小时通关/i.test(post.content))
+    post.guide_info = normalizeGuideInfo(post.guide_info)
+    assert.ok(post.guide_info)
+    if (post.category) assert.ok(CATEGORIES.includes(post.category))
+  }
+  fs.mkdirSync(output, { recursive: true })
+  fs.mkdirSync(assets, { recursive: true })
+  const records = [], thumbs = []
+  for (const post of posts) {
+    const source = generated.find(x => x.id === post.key)
+    assert.ok(source?.path && fs.existsSync(source.path), `missing ${post.key}`)
+    const original = fs.readFileSync(source.path)
+    const file = path.join(assets, `${post.key}.webp`)
+    const data = await sharp(original).rotate().resize(1200,675,{fit:'cover',position:'centre',withoutEnlargement:true}).webp({quality:82,effort:5}).toBuffer()
+    assert.ok(data.length <= 350 * 1024, `cover budget exceeded: ${post.key}`)
+    fs.writeFileSync(file, data)
+    const info = await sharp(data).metadata()
+    assert.equal(info.width,1200)
+    assert.equal(info.height,675)
+    post.cover = `/uploads/images/sg-library-20261004/${post.key}.webp`
+    records.push({key:post.key,file:`${post.key}.webp`,url:post.cover,bytes:data.length,width:info.width,height:info.height,sha256:sha(data),originalSha256:sha(original),prompt:source.prompt})
+    thumbs.push({input:await sharp(data).resize(300,169).toBuffer(),left:(thumbs.length%4)*300,top:Math.floor(thumbs.length/4)*169})
+  }
+  assert.equal(new Set(records.map(x=>x.sha256)).size,24,'covers must be independent')
+  await sharp({create:{width:1200,height:1014,channels:3,background:'#10151b'}}).composite(thumbs).jpeg({quality:85}).toFile(path.join(output,'cover-gallery.jpg'))
+  const payload = {batch:pack.batch,games:pack.games,existing:pack.existing,posts,assets:records}
+  const bytes = Buffer.from(JSON.stringify(payload,null,2))
+  fs.writeFileSync(path.join(output,'payload.json'),bytes)
+  fs.writeFileSync(path.join(output,'payload.sha256'),sha(bytes)+'\n')
+  const sourceMd = ['# 线上攻略内容源（2026-10-04）','',...pack.games.map(g=>`- ${g.name}：[官方资料](${g.source})`),'',...pack.existing.map(x=>`## 现有文章 #${x.id}：${x.title}\n\n${x.content}\n`),...posts.map(x=>`## ${pack.games.find(g=>g.key===x.game).name}：${x.title}\n\n${x.content}\n`)].join('\n')
+  fs.writeFileSync(path.join(root,'docs/攻略内容与游戏资料-2026-10-04.md'),sourceMd)
+  console.log(JSON.stringify({batch:pack.batch,existing:pack.existing.length,games:pack.games.length,posts:posts.length,covers:records.length,totalCoverBytes:records.reduce((n,x)=>n+x.bytes,0),maxCoverBytes:Math.max(...records.map(x=>x.bytes)),payloadSha256:sha(bytes)},null,2))
+}
+main().catch(e=>{console.error(e);process.exitCode=1})

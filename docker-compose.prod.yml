@@ -1,0 +1,38 @@
+# 生产覆盖：TLS 终止、强制 HTTPS，并启用生产安全校验。
+services:
+  server:
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY_HOPS: 1
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?请设置 HTTPS 网站源地址}
+      SITE_HOST: ${SITE_HOST:?请设置网站域名}
+      MIN_UPLOAD_FREE_MB: ${MIN_UPLOAD_FREE_MB:-2048}
+      MAX_TRANSCODE_CONCURRENCY: 1
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    environment:
+      SITE_HOST: ${SITE_HOST:?请设置网站域名}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile.prod
+    ports:
+      - "443:443"
+    volumes:
+      - server-uploads:/usr/share/nginx/html/uploads:ro
+      - ./nginx/certs:/etc/nginx/certs:ro

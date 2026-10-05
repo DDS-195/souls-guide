@@ -1,44 +1,54 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { userApi } from '../api'
+import { errorMessage } from '../utils/errors'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
-const errMsg = ref('')
+const pendingSession = ref(userStore.token && !userStore.userInfo ? userStore.token : '')
+const errMsg = ref(pendingSession.value ? '用户资料尚未加载完成，请点击重试' : '')
+let alive = true
+onBeforeUnmount(() => { alive = false })
 
 async function handleLogin() {
+  if (loading.value || !alive) return
   errMsg.value = ''
-  if (!form.value.username) {
+  const retryProfile = !!pendingSession.value && pendingSession.value === userStore.token
+  if (!retryProfile && !form.value.username) {
     errMsg.value = '请输入用户名'
     return
   }
-  if (!form.value.password) {
+  if (!retryProfile && !form.value.password) {
     errMsg.value = '请输入密码'
     return
   }
   loading.value = true
   try {
-    const res: any = await userApi.login(form.value)
-    userStore.setToken(res.data.token)
-    // 登录接口只返回 {token, username, role}，补拉 /users/me 拿完整信息（含 id/昵称/头像）
-    try {
-      const me: any = await userApi.getMe()
-      userStore.setUserInfo(me.data)
-    } catch {
-      userStore.setUserInfo({ username: res.data.username, role: res.data.role })
+    if (!retryProfile) {
+      const res = await userApi.login({ ...form.value })
+      if (!alive) return
+      userStore.setToken(res.data.token)
+      pendingSession.value = res.data.token
     }
+    const session = pendingSession.value
+    await userStore.ensureUserInfo()
+    if (!alive || session !== userStore.token) return
     // 登录后回到被守卫拦截前的页面（?redirect=原路径）；仅接受站内相对路径，防开放重定向
-    const redirect = route.query.redirect as string | undefined
-    router.push(redirect && redirect.startsWith('/') ? redirect : '/')
-  } catch (e: any) {
-    errMsg.value = e.response?.data?.message || '登录失败'
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+    const safeRedirect = redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.startsWith('/\\')
+    router.push(safeRedirect ? redirect : '/')
+  } catch (error: unknown) {
+    if (!alive) return
+    errMsg.value = pendingSession.value && pendingSession.value === userStore.token
+      ? '登录凭证已获取，但用户资料加载失败。请点击重试加载资料。'
+      : errorMessage(error, '登录失败')
   } finally {
-    loading.value = false
+    if (alive) loading.value = false
   }
 }
 </script>
@@ -46,28 +56,31 @@ async function handleLogin() {
 <template>
   <div class="auth-page">
     <div class="auth-card">
-      <h1 class="auth-logo" @click="router.push('/')">🔥 SoulsGuide</h1>
+      <h1 class="auth-logo"><router-link to="/">🔥 SoulsGuide</router-link></h1>
       <p class="auth-sub">登录你的猎人笔记</p>
 
-      <div class="auth-form">
-        <label class="auth-label">用户名</label>
-        <input v-model="form.username" class="auth-input" placeholder="输入用户名" @keyup.enter="handleLogin" />
+      <form class="auth-form" @submit.prevent="handleLogin">
+        <label class="auth-label" for="login-username">用户名</label>
+        <input id="login-username" v-model="form.username" name="username" autocomplete="username" :disabled="loading || !!pendingSession && pendingSession === userStore.token" class="auth-input" placeholder="输入用户名" />
 
-        <label class="auth-label">密码</label>
+        <label class="auth-label" for="login-password">密码</label>
         <input
+          id="login-password"
           v-model="form.password"
+          name="password"
+          autocomplete="current-password"
+          :disabled="loading || !!pendingSession && pendingSession === userStore.token"
           class="auth-input"
           type="password"
           placeholder="输入密码"
-          @keyup.enter="handleLogin"
         />
 
-        <p v-if="errMsg" class="auth-error">{{ errMsg }}</p>
+        <p v-if="errMsg" class="auth-error" role="alert">{{ errMsg }}</p>
 
-        <button class="auth-btn" :disabled="loading" @click="handleLogin">
-          {{ loading ? '登录中...' : '登 录' }}
+        <button type="submit" class="auth-btn" :disabled="loading">
+          {{ loading ? '加载中...' : pendingSession && pendingSession === userStore.token ? '重试加载资料' : '登 录' }}
         </button>
-      </div>
+      </form>
 
       <p class="auth-switch">没有账号？<router-link to="/register">立即注册</router-link></p>
     </div>

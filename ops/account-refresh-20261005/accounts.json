@@ -1,0 +1,12 @@
+[
+  {"id":3,"expectedUsername":"sg_demo_20260914_01","username":"creator2","role":"creator","style":"pixel-art","background":"e9ddc7"},
+  {"id":4,"expectedUsername":"sg_demo_20260914_02","username":"creator3","role":"creator","style":"pixel-art","background":"d9e3dd"},
+  {"id":5,"expectedUsername":"sg_demo_20260914_03","username":"creator4","role":"creator","style":"pixel-art","background":"dce2ed"},
+  {"id":6,"expectedUsername":"sg_demo_20260914_04","username":"creator5","role":"creator","style":"pixel-art","background":"e4dcec"},
+  {"id":7,"expectedUsername":"sg_demo_20260914_05","username":"creator6","role":"creator","style":"pixel-art","background":"e7dbc9"},
+  {"id":8,"expectedUsername":"sg_demo_20260914_06","username":"creator7","role":"creator","style":"pixel-art","background":"e9d8d4"},
+  {"id":9,"expectedUsername":"sg_demo_20260914_07","username":"creator8","role":"creator","style":"pixel-art","background":"d6e4e7"},
+  {"id":10,"expectedUsername":"sg_demo_20260914_08","username":"user2","role":"user","style":"lorelei","background":"e8dfd0"},
+  {"id":11,"expectedUsername":"sg_demo_20260914_09","username":"user3","role":"user","style":"lorelei","background":"dbe5d8"},
+  {"id":12,"expectedUsername":"sg_demo_20260914_10","username":"user4","role":"user","style":"lorelei","background":"dce2ec"}
+]

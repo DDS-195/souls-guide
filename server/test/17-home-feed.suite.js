@@ -1,0 +1,45 @@
+const H = require('./helpers')
+
+module.exports = async function () {
+  const { test, assert, mkUser, mkPost, pool, http } = H
+  const author = await mkUser('homefeed')
+  const a = await mkPost(author)
+  const b = await mkPost(author)
+  await pool.execute('UPDATE users SET nickname=? WHERE id=?', ['首页测试作者', author])
+  await pool.execute("UPDATE posts SET created_at='2026-01-01', published_at='2026-02-02', view_count=7 WHERE id=?", [a])
+  await pool.execute("UPDATE posts SET created_at='2026-02-01', published_at='2026-02-01', view_count=7 WHERE id=?", [b])
+  await test('首页最新按发布时间，返回作者昵称及发布时间', async () => {
+    const r = await http('GET', `/posts?user_id=${author}&sort=latest`)
+    assert.equal(r.status, 200)
+    assert.deepEqual(r.data.data.list.map(p => p.id), [a, b])
+    assert.equal(r.data.data.list[0].nickname, '首页测试作者')
+    assert.ok(r.data.data.list[0].published_at)
+  })
+  await test('最多浏览相同计数使用编号稳定分页', async () => {
+    const first = await http('GET', `/posts?user_id=${author}&sort=hot&pageSize=1&page=1`)
+    const second = await http('GET', `/posts?user_id=${author}&sort=hot&pageSize=1&page=2`)
+    assert.equal(first.data.data.total, 2)
+    assert.equal(first.data.data.list[0].id, b)
+    assert.equal(second.data.data.list[0].id, a)
+  })
+  await test('列表视频标记为布尔值，仅关联视频才为true，多段媒体不重复文章', async () => {
+    await pool.execute("INSERT INTO media (post_id,url,type) VALUES (?,?,'video'),(?,?,'video'),(?,?,'image')",
+      [a,'/uploads/videos/home-a.mp4',a,'/uploads/videos/home-b.mp4',b,'/uploads/images/home-b.png'])
+    const r=await http('GET',`/posts?user_id=${author}&pageSize=1&page=1`)
+    assert.equal(r.data.data.total,2)
+    assert.equal(r.data.data.list.length,1)
+    assert.equal(r.data.data.list[0].id,a)
+    assert.equal(r.data.data.list[0].has_video,true)
+    assert.ok(!('media' in r.data.data.list[0]),'list must not include media URLs')
+    const image=await http('GET',`/posts?user_id=${author}&pageSize=1&page=2`)
+    assert.equal(image.data.data.list[0].has_video,false)
+    await require('../src/services/postService').setTags(a,['视频标记测试'])
+    const filtered=await http('GET',`/posts?user_id=${author}&keyword=${encodeURIComponent('视频标记测试')}`)
+    assert.equal(filtered.data.data.total,1)
+    assert.equal(filtered.data.data.list[0].has_video,true)
+    await pool.execute("DELETE FROM media WHERE post_id=? AND type='video'",[a])
+    const removed=await http('GET',`/posts?ids=${a},${b}`)
+    assert.equal(removed.data.data.total,2)
+    assert.ok(removed.data.data.list.every(p=>p.has_video===false),'removed video must clear marker')
+  })
+}

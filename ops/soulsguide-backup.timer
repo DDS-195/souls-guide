@@ -1,0 +1,12 @@
+[Unit]
+Description=SoulsGuide daily backup at 04:00 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Shanghai
+AccuracySec=1min
+# Do not unexpectedly stop the website after a missed maintenance window.
+Persistent=false
+Unit=soulsguide-backup.service
+
+[Install]
+WantedBy=timers.target

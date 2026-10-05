@@ -1,0 +1,34 @@
+# 与基础配置组合使用；不要叠加 docker-compose.prod.yml。
+# 显式确认明文风险后，仅用于公网IP临时演示/受限测试。
+services:
+  server:
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY_HOPS: 1
+      ALLOW_INSECURE_HTTP: ${ALLOW_INSECURE_HTTP:?请显式设置true确认HTTP明文风险}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?请设置http源地址}
+      SITE_HOST: ${SITE_HOST:?请设置服务器IPv4地址}
+      MIN_UPLOAD_FREE_MB: ${MIN_UPLOAD_FREE_MB:-2048}
+      MAX_TRANSCODE_CONCURRENCY: 1
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  nginx:
+    environment:
+      SITE_HOST: ${SITE_HOST:?请设置服务器IPv4地址}
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile.prod-http
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

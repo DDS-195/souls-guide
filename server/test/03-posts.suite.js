@@ -28,7 +28,7 @@ module.exports = async function postsSuite() {
     H.assert.equal(c.status, 200)
     postId = c.data.data.id
     created.posts.push(postId)
-    await pool.execute("UPDATE posts SET status='published' WHERE id=?", [postId])
+    await pool.execute("UPDATE posts SET status='published', published_at=NOW() WHERE id=?", [postId])
     const r = await http('GET', '/posts', {})
     const hit = r.data.data.list.find(p => p.id === postId)
     H.assert.ok(hit, '列表应包含新文章')
@@ -36,6 +36,8 @@ module.exports = async function postsSuite() {
     H.assert.equal(hit.username, `pauthor_${SEQ}`)
     H.assert.ok(Array.isArray(hit.avatar) || hit.avatar === null || typeof hit.avatar === 'string')
     H.assert.deepEqual([...hit.tags].sort(), ['无伤', '近战'].sort())
+    H.assert.ok(!('content' in hit), '公开列表不得返回 LONGTEXT 正文')
+    H.assert.ok(!('reject_reason' in hit), '公开列表不得返回驳回原因')
   })
   await test('game_id/category/keyword/user_id/ids 过滤生效', async () => {
     const byGame = await http('GET', `/posts?game_id=1`)
@@ -62,12 +64,24 @@ module.exports = async function postsSuite() {
   })
 
   // ---- 详情 ----
-  await test('GET /:id → 200 含 tags/media 且 view_count+1', async () => {
+  await test('GET /:id 无统计副作用；POST /:id/view 有效阅读 10 秒去重', async () => {
     const before = (await http('GET', `/posts/${postId}`)).data.data.view_count
     const r = await http('GET', `/posts/${postId}`)
     H.assert.equal(r.status, 200)
-    H.assert.equal(r.data.data.view_count, before + 1)
+    H.assert.equal(r.data.data.view_count, before)
     H.assert.ok(Array.isArray(r.data.data.tags) && Array.isArray(r.data.data.media))
+    H.assert.equal(r.data.data.favorite_count, 0)
+    H.assert.equal(r.headers['cache-control'], 'no-store')
+    H.assert.ok(!('reject_reason' in r.data.data))
+    const visitorId = `visitor_${SEQ}_post_detail`
+    const firstView = await http('POST', `/posts/${postId}/view`, { body: { visitor_id: visitorId } })
+    H.assert.equal(firstView.status, 200)
+    H.assert.equal(firstView.data.data.counted, true)
+    H.assert.equal(firstView.data.data.view_count, before + 1)
+    const duplicate = await http('POST', `/posts/${postId}/view`, { body: { visitor_id: visitorId } })
+    H.assert.equal(duplicate.data.data.counted, false)
+    H.assert.equal(duplicate.data.data.view_count, before + 1)
+    H.assert.equal((await http('GET', `/posts/${postId}`)).data.data.view_count, before + 1)
   })
   await test('draft 文章详情 → 404（可见性契约）', async () => {
     const pid = await mkPost(authorId, { status: 'draft' })
@@ -111,6 +125,8 @@ module.exports = async function postsSuite() {
 
   // ---- 视频 media 写入（D13）----
   await test('带 video 参数创建 → media 表写入 type=video', async () => {
+    await H.registerAsset(authorId, '/uploads/images/2026/08/mock.jpg', 'image')
+    await H.registerAsset(authorId, '/uploads/videos/2026/08/mock.mp4', 'video')
     const r = await http('POST', '/posts', { token: authorTok, body: { title: `视频文_${SEQ}`, content: '<p><img src="/uploads/images/2026/08/mock.jpg" alt="p"></p>', game_id: 1, category: 'BOSS攻略', video: '/uploads/videos/2026/08/mock.mp4' } })
     H.assert.equal(r.status, 200)
     created.posts.push(r.data.data.id)
@@ -124,24 +140,27 @@ module.exports = async function postsSuite() {
 
   // ---- 编辑 ----
   await test('PUT 编辑本人 → 200；他人 → 403', async () => {
-    const ok = await http('PUT', `/posts/${postId}`, { token: authorTok, body: { title: '改标题' } })
+    const ok = await http('PUT', `/posts/${postId}`, { token: authorTok, body: { content_version: 1, title: '改标题' } })
     H.assert.equal(ok.status, 200)
     const deny = await http('PUT', `/posts/${postId}`, { token: otherTok, body: { title: '抢' } })
     H.assert.equal(deny.status, 403)
-    const adm = await http('PUT', `/posts/${postId}`, { token: adminTok, body: { title: '管理员改' } })
+    const adm = await http('PUT', `/posts/${postId}`, { token: adminTok, body: { content_version: 2, title: '管理员改' } })
     H.assert.equal(adm.status, 200)
   })
-  await test('编辑 published → 自动重置 pending（P1-7 修复）', async () => {
+  await test('编辑 published → 独立待审修订，原文章保持公开', async () => {
     const pubX = await mkPost(authorId, { status: 'published' })
-    const r = await http('PUT', `/posts/${pubX}`, { token: authorTok, body: { title: '触发重审' } })
+    const r = await http('PUT', `/posts/${pubX}`, { token: authorTok, body: { content_version: 1, title: '触发重审' } })
     H.assert.equal(r.status, 200)
     const [[p]] = await pool.execute('SELECT status FROM posts WHERE id=?', [pubX])
-    H.assert.equal(p.status, 'pending')
+    H.assert.equal(p.status, 'published')
+    H.assert.equal(r.data.data.status, 'pending')
+    H.assert.equal(r.data.data.is_revision, true)
   })
   await test('编辑不带 video 字段 → 视频 media 保留（P2-6 修复）', async () => {
     const pid = await mkPost(authorId, { status: 'draft', video: '/uploads/videos/2026/08/keep.mp4', content: '<p>x</p>' })
     await pool.execute("INSERT INTO media (post_id, url, type, sort_order) VALUES (?,?,?,?)", [pid, '/uploads/videos/2026/08/keep.mp4', 'video', 0])
-    const r = await http('PUT', `/posts/${pid}`, { token: authorTok, body: { content: '<p>只改正文</p>' } })
+    await H.attachAsset(authorId, pid, '/uploads/videos/2026/08/keep.mp4', 'video', 'video')
+    const r = await http('PUT', `/posts/${pid}`, { token: authorTok, body: { content_version: 1, content: '<p>只改正文</p>' } })
     H.assert.equal(r.status, 200)
     const [media] = await pool.execute("SELECT url FROM media WHERE post_id=? AND type='video'", [pid])
     H.assert.equal(media.length, 1)
@@ -154,7 +173,7 @@ module.exports = async function postsSuite() {
     const r = await http('DELETE', `/posts/${pid}`, { token: otherTok })
     H.assert.equal(r.status, 403)
   })
-  await test('删除文章清理磁盘文件（P2-5 修复）', async () => {
+  await test('删除文章仅解除资产引用，物理文件进入延迟回收', async () => {
     // 真实上传两张图：一张内嵌 content，一张做封面
     const up1 = await http('POST', '/media/upload/image', { token: authorTok, form: H.pngForm('inner.png') })
     const up2 = await http('POST', '/media/upload/image', { token: authorTok, form: H.pngForm('cover.png') })
@@ -169,8 +188,26 @@ module.exports = async function postsSuite() {
     H.assert.equal(del.status, 200)
     const [[m]] = await pool.execute('SELECT COUNT(*) c FROM media WHERE post_id=?', [c.data.data.id])
     H.assert.equal(m.c, 0, 'media 行应级联删除')
-    expectFile(imgUrl, false)
-    expectFile(coverUrl, false)
+    expectFile(imgUrl, true)
+    expectFile(coverUrl, true)
+    const [[assets]] = await pool.execute(
+      "SELECT COUNT(*) c FROM upload_assets WHERE owner_id=? AND url IN (?,?) AND status='temporary'",
+      [authorId, imgUrl, coverUrl]
+    )
+    H.assert.equal(assets.c, 2)
+  })
+
+  await test('用户不能绑定其他创作者上传的资源（BOLA 回归）', async () => {
+    const uploaded = await http('POST', '/media/upload/image', { token: otherTok, form: H.pngForm('owned-by-other.png') })
+    H.assert.equal(uploaded.status, 200)
+    const otherUrl = trackFile(uploaded.data.data.url)
+    const denied = await http('POST', '/posts', {
+      token: authorTok,
+      body: { title: '越权资源', content: '<p>x</p>', cover: otherUrl, game_id: 1, category: 'BOSS攻略' },
+    })
+    H.assert.equal(denied.status, 403)
+    H.assert.equal(denied.data.code, 403)
+    expectFile(otherUrl, true)
   })
 
   // ---- submit 状态机（P1-8）----
@@ -185,9 +222,11 @@ module.exports = async function postsSuite() {
   })
   await test('rejected 可重新提交', async () => {
     const rid = await mkPost(authorId, { status: 'rejected' })
+    await pool.execute("UPDATE posts SET reject_reason='历史驳回原因' WHERE id=?", [rid])
     H.assert.equal((await http('POST', `/posts/${rid}/submit`, { token: authorTok })).status, 200)
-    const [[p]] = await pool.execute('SELECT status FROM posts WHERE id=?', [rid])
+    const [[p]] = await pool.execute('SELECT status, reject_reason FROM posts WHERE id=?', [rid])
     H.assert.equal(p.status, 'pending')
+    H.assert.equal(p.reject_reason, null)
   })
 
   // ---- my/list（方案 A 回填契约）----
@@ -201,6 +240,30 @@ module.exports = async function postsSuite() {
     H.assert.ok(d.list.every(p => Array.isArray(p.tags)))
     H.assert.ok(d.list.some(p => Array.isArray(p.media) && p.media.some(m => m.type === 'video')))
   })
+
+  await test('GET /manage/:id → 本人/admin 可直接回填，其他创作者不可读取', async () => {
+    const mineId = await mkPost(authorId, { status: 'draft', content: '<p>直接回填</p>' })
+    const own = await http('GET', `/posts/manage/${mineId}`, { token: authorTok })
+    H.assert.equal(own.status, 200)
+    H.assert.equal(own.data.data.id, mineId)
+    H.assert.equal(own.data.data.content, '<p>直接回填</p>')
+    H.assert.ok(Array.isArray(own.data.data.tags) && Array.isArray(own.data.data.media))
+    H.assert.equal((await http('GET', `/posts/manage/${mineId}`, { token: otherTok })).status, 403)
+    H.assert.equal((await http('GET', `/posts/manage/${mineId}`, { token: adminTok })).status, 200)
+  })
+
+  await test('draft/pending/rejected 文章不可点赞、收藏、评论、读评论、查状态或举报', async () => {
+    const hidden = await mkPost(authorId, { status: 'draft' })
+    H.assert.equal((await http('POST', `/posts/${hidden}/like`, { token: readerTok })).status, 404)
+    H.assert.equal((await http('POST', `/posts/${hidden}/favorite`, { token: readerTok })).status, 404)
+    H.assert.equal((await http('POST', `/posts/${hidden}/comments`, { token: readerTok, body: { content: 'x' } })).status, 404)
+    H.assert.equal((await http('GET', `/posts/${hidden}/comments`)).status, 404)
+    H.assert.equal((await http('GET', `/posts/${hidden}/status`, { token: readerTok })).status, 404)
+    H.assert.equal((await http('POST', '/reports', { token: readerTok, body: { target_type: 'post', target_id: hidden, reason: 'x' } })).status, 400)
+  })
+
+  // 前面的编辑用例已把主文章转为 pending；明确重新发布后再验证评论树。
+  await pool.execute("UPDATE posts SET status='published', reject_reason='不应公开' WHERE id=?", [postId])
 
   // ---- 评论（P0-3/P1-5）----
   let rootCid = null
@@ -229,8 +292,22 @@ module.exports = async function postsSuite() {
     const r = await http('POST', '/comments/' + rootCid + '/reply', { token: readerTok, body: { content: '回复一楼' } })
     H.assert.equal(r.status, 200)
     const c = await http('GET', `/posts/${postId}/comments`)
-    const root = c.data.data.find(x => x.id === rootCid)
+    const root = c.data.data.list.find(x => x.id === rootCid)
     H.assert.ok(root.replies.some(x => x.content === '回复一楼'))
+  })
+  await test('根评论分页 → total/页大小正确且相邻页不重复', async () => {
+    for (let i = 0; i < 3; i++) {
+      await http('POST', `/posts/${postId}/comments`, { token: readerTok, body: { content: `分页评论 ${i}` } })
+    }
+    const first = (await http('GET', `/posts/${postId}/comments?page=1&pageSize=2`)).data.data
+    const second = (await http('GET', `/posts/${postId}/comments?page=2&pageSize=2`)).data.data
+    H.assert.equal(first.page, 1)
+    H.assert.equal(first.pageSize, 2)
+    H.assert.equal(first.list.length, 2)
+    H.assert.equal(second.list.length, 2)
+    H.assert.ok(first.total >= 5)
+    const firstIds = new Set(first.list.map(comment => comment.id))
+    H.assert.ok(second.list.every(comment => !firstIds.has(comment.id)), '相邻页不应出现重复根评论')
   })
   await test('删除他人评论 → 403', async () => {
     const r = await http('DELETE', `/comments/${rootCid}`, { token: otherTok })
@@ -259,10 +336,15 @@ module.exports = async function postsSuite() {
     const [[p]] = await pool.execute('SELECT like_count FROM posts WHERE id=?', [pub2])
     H.assert.equal(p.like_count, 0, '计数应复原')
   })
-  await test('收藏 toggle true→false', async () => {
+  await test('收藏 toggle true→false，响应与详情均返回实时收藏数', async () => {
     const pub3 = await mkPost(authorId, { status: 'published' })
-    H.assert.equal((await http('POST', `/posts/${pub3}/favorite`, { token: readerTok })).data.data.favorited, true)
-    H.assert.equal((await http('POST', `/posts/${pub3}/favorite`, { token: readerTok })).data.data.favorited, false)
+    const added = (await http('POST', `/posts/${pub3}/favorite`, { token: readerTok })).data.data
+    H.assert.equal(added.favorited, true)
+    H.assert.equal(added.favorite_count, 1)
+    H.assert.equal((await http('GET', `/posts/${pub3}`)).data.data.favorite_count, 1)
+    const removed = (await http('POST', `/posts/${pub3}/favorite`, { token: readerTok })).data.data
+    H.assert.equal(removed.favorited, false)
+    H.assert.equal(removed.favorite_count, 0)
   })
   await test('关注 toggle；关注自己 → 400；不存在 → 404', async () => {
     H.assert.equal((await http('POST', `/follows/${authorId}`, { token: readerTok })).data.data.following, true)

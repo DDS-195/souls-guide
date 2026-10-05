@@ -1,0 +1,75 @@
+:root { --motion-ease: cubic-bezier(.2,.7,.3,1); }
+.selection-indicator { position: absolute; top: 0; left: 0; background: var(--amber); border-radius: 20px; pointer-events: none; }
+.selection-indicator.is-moving { transition: transform 240ms var(--motion-ease), width 240ms var(--motion-ease), height 180ms ease; }
+.interaction-icon { width: 22px; height: 22px; display: block; transition: fill 160ms ease, color 160ms ease; }
+.interaction-icon.selected { fill: currentColor; }
+.heart-icon.selected { color: var(--red); }
+.anchored-menu-enter-active { transform-origin: top right; transition: transform 200ms var(--motion-ease), opacity 160ms ease; }
+.anchored-menu-leave-active { transform-origin: top right; transition: transform 130ms ease, opacity 130ms ease; pointer-events: none; }
+.anchored-menu-enter-from, .anchored-menu-leave-to { opacity: 0; transform: translateY(-6px) scale(.96); }
+/* Route changes use opacity only: transforming the page would re-anchor fixed dialogs. */
+.route-stage { position: relative; min-width: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .article-route-enter-active { transition: opacity 160ms ease; }
+  .article-route-leave-active { transition: opacity 80ms ease; }
+  .article-route-enter-from, .article-route-leave-to { opacity: 0; }
+  .route-slice-enter-active { transition: opacity 240ms var(--motion-ease); }
+  .route-slice-leave-active { transition: opacity 90ms ease-in; }
+  .route-slice-enter-from, .route-slice-leave-to { opacity: 0; }
+  .route-slice-enter-active::before {
+    content: '';
+    position: absolute;
+    z-index: 1;
+    top: 0;
+    left: 0;
+    width: min(180px, 45%);
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    transform-origin: left;
+    pointer-events: none;
+    animation: route-accent 320ms var(--motion-ease) both;
+  }
+  @keyframes route-accent {
+    from { opacity: 0; transform: translateX(-12px) scaleX(.35); }
+    45% { opacity: .75; }
+    to { opacity: 0; transform: translateX(18px) scaleX(1); }
+  }
+  .nav-item { position: relative; }
+  .nav-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 22%;
+    bottom: 22%;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--amber);
+    transform: scaleY(0);
+    opacity: 0;
+    transition: transform 220ms var(--motion-ease), opacity 220ms ease;
+  }
+  .nav-item.active::before { transform: scaleY(1); opacity: 1; }
+  .mobile-nav-item svg { transition: transform 200ms var(--motion-ease); }
+  .mobile-nav-item.active svg { transform: translateY(-2px); }
+}
+/* Explicit controls only; draggable handles and rich-text toolbars keep their own behavior. */
+:is(#app, .am-overlay) :is(.btn, .btn-main, .btn-sub, .send-btn, .sidebar-login-btn, .action-item, .search-submit, .sort-btn, .publish-btn) {
+  transition: scale 120ms var(--motion-ease), color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+:is(#app, .am-overlay) :is(.btn, .btn-main, .btn-sub, .send-btn, .sidebar-login-btn, .action-item, .search-submit, .sort-btn, .publish-btn):not(:disabled):not([aria-disabled="true"]):active {
+  scale: .97;
+}
+:is(#app, .am-overlay) :is(.btn, .btn-main, .btn-sub, .send-btn, .sidebar-login-btn, .action-item, .search-submit, .sort-btn, .publish-btn):focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .selection-indicator.is-moving { transition: none; }
+  .anchored-menu-enter-active, .anchored-menu-leave-active, .interaction-icon { transition: none; }
+  .anchored-menu-enter-from, .anchored-menu-leave-to { transform: none; }
+  .route-slice-enter-active, .route-slice-leave-active, .article-route-enter-active, .article-route-leave-active { transition: none !important; }
+  :is(#app, .am-overlay) :is(.btn, .btn-main, .btn-sub, .send-btn, .sidebar-login-btn, .action-item, .search-submit, .sort-btn, .publish-btn) {
+    transition: none !important;
+    scale: none !important;
+  }
+}

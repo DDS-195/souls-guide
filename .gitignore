@@ -1,8 +1,15 @@
 # SoulsGuide 根 .gitignore（2026-08-12 部署文件新增，防密钥/产物/日志入库）
 .env
+.env.*
+!.env.example
+!.env.http.example
+!**/.env.example
+.test-env
 server/.env
 node_modules/
 **/node_modules/
 server/logs/
 server/uploads/
 client/dist/
+nginx/certs/
+.artifacts/

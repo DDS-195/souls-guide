@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录恢复本地验收</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
+import { createPinia } from 'pinia'
+import Login from './src/views/Login.vue'
+import { userApi } from './src/api'
+import { useUserStore } from './src/stores/user'
+import './src/style.css'
+let attempts = 0
+userApi.login = async () => ({ data: { token:'local-audit-only', username:'回归玩家', role:'creator' } })
+userApi.getMe = async () => {
+  if (++attempts === 1) throw new Error('模拟资料请求临时失败')
+  return { data: { id:424246, username:'回归玩家', nickname:'回归玩家', role:'creator' } }
+}
+const pinia=createPinia()
+const done={setup(){const store=useUserStore();return()=>h('section',{style:'max-width:500px;margin:80px auto;padding:24px;border:1px solid var(--border-subtle);border-radius:12px'},[
+  h('h1','用户资料已恢复'),h('p',`账号：${store.userInfo?.username}；用户编号：${store.userInfo?.id}`),h('p','完整身份已加载，可以进入个人列表和创作页面。'),
+])}}
+const router=createRouter({history:createMemoryHistory(),routes:[{path:'/login',component:Login},{path:'/',component:done}]})
+const app=createApp({render:()=>h('main',[
+  h('p',{style:'text-align:center;color:var(--text-muted);padding:12px'},'本地回归验收 · 模拟网络故障，不连接服务器'),h(RouterView),
+])})
+app.use(pinia).use(router)
+const store=useUserStore();store.logout()
+await router.push('/login');await router.isReady();app.mount('#app')
+</script></body></html>

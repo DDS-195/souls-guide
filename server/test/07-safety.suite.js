@@ -17,6 +17,16 @@ module.exports = async function safetySuite() {
     H.assert.equal(r.status, 413)
     H.assert.equal(r.data.code, 413)
   })
+  await test('分页参数拒绝负数/非数字，并将 pageSize 限制在 50', async () => {
+    const negative = await http('GET', '/posts?page=-1')
+    H.assert.equal(negative.status, 400)
+    H.assert.equal(negative.data.data, null)
+    const invalid = await http('GET', '/posts?pageSize=abc')
+    H.assert.equal(invalid.status, 400)
+    const capped = await http('GET', '/posts?pageSize=999')
+    H.assert.equal(capped.status, 200)
+    H.assert.equal(capped.data.data.pageSize, 50)
+  })
   await test('篡改 token → 401', async () => {
     const uid = await mkUser('stamper')
     const bad = makeToken(uid, 'stamper', 'user') + 'tampered'
@@ -36,8 +46,8 @@ module.exports = async function safetySuite() {
     // 审批前：403
     H.assert.equal((await http('POST', '/posts', { token: oldTok, body: { title: 'x', content: '<p>x</p>', game_id: 1, category: 'BOSS攻略' } })).status, 403)
     // 模拟申请 → admin 审批通过
-    await pool.execute("UPDATE users SET apply_status='pending' WHERE id=?", [uid])
-    H.assert.equal((await http('PUT', `/admin/applications/${uid}/approve`, { token: adminTok })).status, 200)
+    const application = await http('POST', '/users/apply-creator', { token: oldTok, body: { reason: '申请创作' } })
+    H.assert.equal((await http('PUT', `/admin/applications/${uid}/approve`, { token: adminTok, body: { application_id: application.data.data.id } })).status, 200)
     // 审批后：同一旧 token 直接 200（auth 查库覆盖 token role，无需重新登录）
     const r = await http('POST', '/posts', { token: oldTok, body: { title: `实时角色_${SEQ}`, content: '<p>x</p>', game_id: 1, category: 'BOSS攻略' } })
     H.assert.equal(r.status, 200)

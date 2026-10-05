@@ -1,11 +1,13 @@
 {
   "name": "client",
   "private": true,
+  "engines": { "node": ">=24 <25" },
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "test": "node checks/upload.test.mjs && node checks/writing.test.mjs && node checks/guide.test.mjs && node checks/my-lists.test.mjs && node checks/rich-editor.test.mjs && node checks/audit-frontend.test.mjs && node checks/result-motion.test.mjs && node checks/horizontal-drag.test.mjs && node checks/audit-boundaries.test.mjs && node checks/home-pagination.test.mjs && node checks/video-cover.test.mjs",
+    "build": "vue-tsc -b && vite build && node checks/bundle-budget.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -14,8 +16,8 @@
   },
   "dependencies": {
     "@tinymce/tinymce-vue": "^6.3.0",
-    "axios": "^1.19.0",
-    "dompurify": "^3.4.13",
+    "axios": "^1.20.0",
+    "dompurify": "^3.4.16",
     "echarts": "^6.1.0",
     "pinia": "^4.0.2",
     "spark-md5": "^3.0.2",

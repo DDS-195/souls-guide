@@ -41,8 +41,8 @@ function summary() {
 }
 
 // ================= HTTP 封装 =================
-async function http(method, p, { token, body, raw, form } = {}) {
-  const opts = { method, headers: {} }
+async function http(method, p, { token, body, raw, form, headers = {} } = {}) {
+  const opts = { method, headers: { ...headers } }
   if (token) opts.headers.Authorization = `Bearer ${token}`
   if (form) {
     opts.body = form // multipart：不手动设 Content-Type，fetch 自动带 boundary
@@ -56,7 +56,7 @@ async function http(method, p, { token, body, raw, form } = {}) {
   const res = await fetch(BASE + p, opts)
   let data = null
   try { data = await res.json() } catch { /* 非 JSON 响应 */ }
-  return { status: res.status, data }
+  return { status: res.status, data, headers: Object.fromEntries(res.headers.entries()) }
 }
 
 // 直签 token（绕开限流；auth 中间件会查库校验 status/role，安全性同真实登录）
@@ -83,8 +83,10 @@ async function mkUser(username, { role = 'user', apply = 'none', password = 'tes
 }
 
 async function mkPost(userId, { status = 'published', content = '<p>smoke content</p>', title = 'smoke', category = 'BOSS攻略', video = null, cover = null, game_id = 1 } = {}) {
-  const [r] = await pool.execute('INSERT INTO posts (title,content,cover,game_id,category,status,user_id) VALUES (?,?,?,?,?,?,?)',
-    [title, content, cover, game_id, category, status, userId])
+  const [r] = await pool.execute(
+    'INSERT INTO posts (title,content,cover,game_id,category,status,published_at,user_id) VALUES (?,?,?,?,?,?,IF(?=\'published\',NOW(),NULL),?)',
+    [title, content, cover, game_id, category, status, status, userId]
+  )
   created.posts.push(r.insertId)
   return r.insertId
 }
@@ -93,6 +95,26 @@ async function mkGame(name) {
   const [r] = await pool.execute("INSERT INTO games (name, description, sort_order, status) VALUES (?,?,?,?)", [name, '', 0, 1])
   created.games.push(r.insertId)
   return r.insertId
+}
+
+async function registerAsset(ownerId, url, type, status = 'temporary') {
+  await pool.execute(
+    `INSERT INTO upload_assets (owner_id, url, type, status, expires_at)
+     VALUES (?, ?, ?, ?, IF(?='temporary', DATE_ADD(NOW(), INTERVAL 1 DAY), NULL))
+     ON DUPLICATE KEY UPDATE type=VALUES(type), status=VALUES(status), expires_at=VALUES(expires_at)`,
+    [ownerId, url, type, status, status]
+  )
+  const [[asset]] = await pool.execute('SELECT id FROM upload_assets WHERE owner_id=? AND url=?', [ownerId, url])
+  return asset.id
+}
+
+async function attachAsset(ownerId, postId, url, type, usageType, sortOrder = 0) {
+  const assetId = await registerAsset(ownerId, url, type, 'attached')
+  await pool.execute(
+    'INSERT IGNORE INTO post_assets (post_id, asset_id, usage_type, sort_order) VALUES (?, ?, ?, ?)',
+    [postId, assetId, usageType, sortOrder]
+  )
+  return assetId
 }
 
 // ================= 文件工具 =================
@@ -133,6 +155,7 @@ async function cleanup() {
 module.exports = {
   test, summary, http, makeToken, adminToken,
   mkUser, mkPost, mkGame,
+  registerAsset, attachAsset,
   PNG_1PX, pngForm, urlToAbs, trackFile, expectFile,
   created, cleanup, pool, SERVER_ROOT, SEQ, assert,
 }

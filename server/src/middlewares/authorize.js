@@ -1,7 +1,7 @@
 function authorize(...roles) {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({ code: 403, message: '权限不足' })
+      return res.status(403).json({ code: 403, message: '权限不足', data: null })
     }
     next()
   }

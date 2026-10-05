@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>首页过渡本地验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h} from 'vue';
+import {createRouter,createMemoryHistory,RouterView} from 'vue-router';
+import Home from './src/views/Home.vue';
+import {gameApi,postApi} from './src/api';
+import './src/style.css';
+import './src/assets/motion.css';
+gameApi.getList=async()=>({data:[{id:1,name:'艾尔登法环'},{id:2,name:'黑暗之魂'},{id:3,name:'空分类'}]});
+postApi.getList=async(params)=>{
+ await new Promise(resolve=>setTimeout(resolve,params.game_id==='1'?2500:1000));
+ if(params.keyword==='失败') throw new Error('fixture');
+ const label=params.game_id==='1'?'艾尔登法环':params.game_id==='2'?'黑暗之魂':'全部';
+ const list=params.game_id==='3'?[]:Array.from({length:6},(_,i)=>({id:Number(params.game_id||0)*10+i+1,title:`${label}攻略 ${i+1}`,game_name:label,category:'入门',tags:['近战'],created_at:'2026-09-29',nickname:'本地验收'}));
+ return {data:{list,total:list.length}};
+};
+const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:Home}]});
+const app=createApp({render:()=>h('main',{style:'max-width:800px;margin:24px auto;padding:0 16px'},[h(RouterView)])});
+app.use(router);await router.isReady();app.mount('#app');
+</script></body></html>

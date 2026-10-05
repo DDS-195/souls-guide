@@ -5,6 +5,8 @@ import { useUserStore } from '../stores/user'
 import { userApi, interactApi } from '../api'
 import { useTheme } from '../utils/theme'
 import ThemeSwitch from '../components/ThemeSwitch.vue'
+import AppModal from '../components/AppModal.vue'
+import { errorMessage } from '../utils/errors'
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -18,6 +20,7 @@ const followTotal = ref(0)
 const followerTotal = ref(0)
 
 onMounted(async () => {
+  await refreshMe()
   try {
     const r = await interactApi.getFavorites()
     favTotal.value = r.data.total
@@ -25,13 +28,15 @@ onMounted(async () => {
     /* 统计失败显示 0 */
   }
   try {
-    historyCount.value = JSON.parse(localStorage.getItem('viewHistory') || '[]').length
+    historyCount.value = JSON.parse(localStorage.getItem(`viewHistory:${userStore.userInfo?.id || 'guest'}`) || '[]').length
   } catch {
     /* 本地历史损坏显示 0 */
   }
   // 关注/粉丝实时数：GET /users/:id（D18 公开契约，统计为实时 COUNT）
   try {
-    const me: any = await userApi.getProfile(userStore.userInfo?.id)
+    const userId = userStore.userInfo?.id
+    if (!userId) return
+    const me = await userApi.getProfile(userId)
     followTotal.value = me.data.following_count || 0
     followerTotal.value = me.data.follower_count || 0
   } catch {
@@ -43,30 +48,46 @@ onMounted(async () => {
 const applyOpen = ref(false)
 const applyReason = ref('')
 const applyOk = ref(false)
+const statusError = ref('')
+const statusLoading = ref(true)
+
+async function refreshMe() {
+  statusLoading.value = true
+  statusError.value = ''
+  try {
+    userStore.setUserInfo((await userApi.getMe()).data)
+  } catch (error) {
+    statusError.value = errorMessage(error, '申请状态加载失败，请重试')
+  } finally {
+    statusLoading.value = false
+  }
+}
 
 function openApply() {
   applyOpen.value = true
-  applyReason.value = ''
+  applyReason.value = userStore.userInfo?.application?.reason || ''
   applyMsg.value = ''
 }
 
 async function submitApply() {
-  if (!applyReason.value.trim()) {
+  if (applying.value) return
+  if (!applyReason.value.trim() || applyReason.value.trim().length > 500) {
     applyOk.value = false
-    applyMsg.value = '请填写申请理由'
+    applyMsg.value = '请填写 1–500 字的申请理由'
     return
   }
   applying.value = true
   applyMsg.value = ''
   try {
-    const res: any = await userApi.applyCreator(applyReason.value.trim())
+    const res = await userApi.applyCreator(applyReason.value.trim())
     applyOk.value = true
     applyMsg.value = res.message
     applyOpen.value = false
     applyReason.value = ''
-  } catch (e: any) {
+    await refreshMe()
+  } catch (error: unknown) {
     applyOk.value = false
-    applyMsg.value = e.response?.data?.message || '申请失败'
+    applyMsg.value = errorMessage(error, '申请失败')
   } finally {
     applying.value = false
   }
@@ -84,9 +105,9 @@ function handleLogout() {
 <template>
   <div style="max-width: 500px; margin: 0 auto; padding: 24px 16px 40px; color: var(--text-primary)">
     <!-- 头部（可点击跳编辑） -->
-    <div
+    <router-link
       style="display: flex; align-items: center; gap: 14px; margin-bottom: 20px; cursor: pointer"
-      @click="router.push('/me/edit')"
+      :to="'/me/edit'"
     >
       <div
         :style="{
@@ -128,7 +149,7 @@ function handleLogout() {
         "
         >{{ roleLabel[userStore.role] || userStore.role }}</span
       >
-    </div>
+    </router-link>
 
     <!-- 四组数据 -->
     <div
@@ -141,22 +162,22 @@ function handleLogout() {
         border-bottom: 1px solid var(--border-subtle);
       "
     >
-      <div class="stat" @click="router.push('/me/following')">
+      <router-link class="stat" :to="'/me/following'">
         <span class="stat-num">{{ followTotal }}</span
         ><span class="stat-label">关注</span>
-      </div>
-      <div class="stat" @click="router.push('/me/followers')">
+      </router-link>
+      <router-link class="stat" :to="'/me/followers'">
         <span class="stat-num">{{ followerTotal }}</span
         ><span class="stat-label">粉丝</span>
-      </div>
-      <div class="stat" @click="router.push('/me/favorites')">
+      </router-link>
+      <router-link class="stat" :to="'/me/favorites'">
         <span class="stat-num">{{ favTotal }}</span
         ><span class="stat-label">收藏</span>
-      </div>
-      <div class="stat" @click="router.push('/me/history')">
+      </router-link>
+      <router-link class="stat" :to="'/me/history'">
         <span class="stat-num">{{ historyCount }}</span
         ><span class="stat-label">浏览</span>
-      </div>
+      </router-link>
     </div>
 
     <!-- 角色功能入口 -->
@@ -165,11 +186,24 @@ function handleLogout() {
       <template v-if="userStore.role === 'user'">
         <button
           class="fn-btn"
+          :disabled="statusLoading || !!statusError || userStore.userInfo?.apply_status === 'pending'"
           style="background: var(--amber-glow); color: var(--amber); border-color: rgba(232, 168, 56, 0.2)"
           @click="openApply"
         >
-          ✏️ 申请成为创作者
+          {{
+            statusLoading
+              ? '加载申请状态…'
+              : userStore.userInfo?.apply_status === 'pending'
+                ? '⏳ 创作者申请审核中'
+                : userStore.userInfo?.apply_status === 'rejected'
+                  ? '✏️ 重新申请创作者'
+                  : '✏️ 申请成为创作者'
+          }}
         </button>
+        <p v-if="userStore.userInfo?.apply_status === 'rejected'" class="application-status">
+          驳回原因：{{ userStore.userInfo?.application?.reject_reason || '历史记录未保存原因' }}
+        </p>
+        <button v-if="statusError" class="fn-btn" @click="refreshMe">{{ statusError }} · 重试</button>
         <p
           v-if="applyMsg"
           :style="{ textAlign: 'center', fontSize: '0.82rem', color: applyOk ? 'var(--green)' : 'var(--red)' }"
@@ -207,6 +241,7 @@ function handleLogout() {
         <button class="fn-btn admin-entry" @click="router.push('/admin/applications')">📝 创作者申请</button>
         <button class="fn-btn admin-entry" @click="router.push('/admin/games')">🎮 游戏管理</button>
         <button class="fn-btn admin-entry" @click="router.push('/admin/announcements')">📢 公告管理</button>
+        <button class="fn-btn admin-entry" @click="router.push('/admin/notifications-send')">🔔 系统通知</button>
         <button class="fn-btn admin-entry" @click="router.push('/admin/users')">👥 用户管理</button>
         <button class="fn-btn admin-entry" @click="router.push('/admin/logs')">📜 日志管理</button>
       </template>
@@ -217,29 +252,27 @@ function handleLogout() {
     <ThemeSwitch ref="themeSwitch" />
 
     <!-- 申请创作者弹窗：填写申请理由 -->
-    <Teleport to="body">
-      <div v-if="applyOpen" class="apply-ov" @click.self="applyOpen = false">
-        <div class="apply-card">
-          <div class="apply-title">申请成为创作者</div>
-          <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 10px">
-            请填写你的申请理由（如擅长游戏、内容方向等），管理员审核通过后即可发布攻略
-          </div>
-          <textarea
-            v-model="applyReason"
-            class="apply-input"
-            rows="4"
-            maxlength="300"
-            placeholder="申请理由（必填，≤300 字）"
-          ></textarea>
-          <div style="display: flex; gap: 8px; margin-top: 12px">
-            <button class="apply-btn" @click="applyOpen = false">取消</button>
-            <button class="apply-btn primary" :disabled="applying" @click="submitApply">
-              {{ applying ? '提交中...' : '提交申请' }}
-            </button>
-          </div>
-        </div>
+    <AppModal :open="Boolean(applyOpen)" title="申请成为创作者" @close="!applying && (applyOpen = false)"><template v-if="applyOpen">
+      <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 10px">
+        请填写你的申请理由（如擅长游戏、内容方向等），管理员审核通过后即可发布攻略
       </div>
-    </Teleport>
+      <textarea
+        v-model="applyReason"
+        class="apply-input"
+        rows="4"
+        :disabled="applying"
+        maxlength="500"
+        aria-label="申请理由"
+        placeholder="申请理由（必填，≤500 字）"
+      ></textarea>
+      <p v-if="applyMsg && !applyOk" role="alert">{{ applyMsg }}</p>
+      <div style="display: flex; gap: 8px; margin-top: 12px">
+        <button class="apply-btn" :disabled="applying" @click="applyOpen = false">取消</button>
+        <button class="apply-btn primary" :disabled="applying" @click="submitApply">
+          {{ applying ? '提交中...' : '提交申请' }}
+        </button>
+      </div>
+    </template></AppModal>
   </div>
 </template>
 

@@ -2,14 +2,24 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { postApi } from '../../api'
+import AppPagination from '../../components/AppPagination.vue'
+import AppEmpty from '../../components/AppEmpty.vue'
+import { usePagination } from '../../composables/usePagination'
+import { useLatestRequest } from '../../composables/useLatestRequest'
+import type { MyPost, PostStatus } from '../../types/api'
+import { errorMessage } from '../../utils/errors'
 
 const router = useRouter()
-const posts = ref<any[]>([])
+const posts = ref<MyPost[]>([])
 const submittingId = ref<number | null>(null)
 const msg = ref('')
+const loading = ref(true)
+const loadError = ref('')
 
-const statusMap: any = { draft: '草稿', pending: '审核中', published: '已发布', rejected: '已驳回' }
-const statusColor: any = {
+const { page, total, pageCount, pageSize, go } = usePagination(10)
+const { next, isLatest } = useLatestRequest()
+const statusMap: Record<PostStatus, string> = { draft: '草稿', pending: '审核中', published: '已发布', rejected: '已驳回' }
+const statusColor: Record<PostStatus, string> = {
   draft: 'var(--text-muted)',
   pending: 'var(--amber)',
   published: 'var(--green)',
@@ -19,27 +29,42 @@ const statusColor: any = {
 onMounted(load)
 
 async function load() {
+  const sequence = next()
+  loading.value = true
+  loadError.value = ''
   try {
     // 4.1 契约 GET /posts/my/list：本人全部状态文章（含 reject_reason），详情仅 published 公开
-    const res: any = await postApi.getMyList({ pageSize: 50 })
+    const res = await postApi.getMyList({ page: page.value, pageSize })
+    if (!isLatest(sequence)) return
     posts.value = res.data.list || []
+    total.value = res.data.total
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+      return load()
+    }
   } catch {
-    msg.value = '加载失败，请重试'
+    if (isLatest(sequence)) loadError.value = '加载失败，请重试'
+  } finally {
+    if (isLatest(sequence)) loading.value = false
   }
 }
 
 /** 草稿/被驳回的文章重新提交审核（POST /posts/:id/submit，draft/rejected → pending） */
-async function resubmit(p: any) {
+async function resubmit(p: MyPost) {
   submittingId.value = p.id
   try {
     await postApi.submit(p.id)
     p.status = 'pending'
     msg.value = '已提交审核'
-  } catch (e: any) {
-    msg.value = e.response?.data?.message || '提交失败'
+  } catch (error: unknown) {
+    msg.value = errorMessage(error, '提交失败')
   } finally {
     submittingId.value = null
   }
+}
+
+function goPage(nextPage: number) {
+  if (go(nextPage)) load()
 }
 </script>
 
@@ -47,7 +72,8 @@ async function resubmit(p: any) {
   <div style="max-width: 900px; margin: 0 auto; padding: 20px; color: var(--text-primary)">
     <h2 style="font-family: Cinzel, serif; color: var(--amber); margin-bottom: 20px">我的作品</h2>
     <p v-if="msg" style="text-align: center; color: var(--green); font-size: 0.82rem; margin-bottom: 10px">{{ msg }}</p>
-    <div style="display: flex; flex-direction: column; gap: 8px">
+    <AppEmpty v-if="loading || loadError || !posts.length" :loading="loading" :error="loadError" empty-text="还没有作品" @retry="load" />
+    <div v-else style="display: flex; flex-direction: column; gap: 8px">
       <div
         v-for="p in posts"
         :key="p.id"
@@ -74,7 +100,8 @@ async function resubmit(p: any) {
               flex-wrap: wrap;
             "
           >
-            <span :style="{ color: statusColor[p.status] }">{{ statusMap[p.status] || p.status }}</span>
+            <span :style="{ color: statusColor[p.status] }">{{ p.is_revision ? '修订' : '' }}{{ statusMap[p.status] || p.status }}</span>
+            <span v-if="p.public_status === 'published'">原文章公开中</span>
             <span>{{ p.view_count }} 阅读 · {{ p.created_at?.slice(0, 10) }}</span>
             <span v-if="p.status === 'rejected' && p.reject_reason" style="color: var(--red)"
               >驳回原因：{{ p.reject_reason }}</span
@@ -83,7 +110,7 @@ async function resubmit(p: any) {
         </div>
         <div style="display: flex; gap: 8px; flex-shrink: 0">
           <button
-            v-if="p.status === 'published'"
+            v-if="p.status === 'published' || p.public_status === 'published'"
             style="
               padding: 6px 12px;
               background: var(--bg-card);
@@ -121,8 +148,8 @@ async function resubmit(p: any) {
           </button>
         </div>
       </div>
-      <div v-if="!posts.length" style="text-align: center; color: var(--text-muted); padding: 60px">还没有作品</div>
     </div>
+    <AppPagination v-if="!loading && !loadError" :page="page" :page-count="pageCount" @change="goPage" />
   </div>
 </template>
 

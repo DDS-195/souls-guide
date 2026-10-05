@@ -39,6 +39,25 @@ module.exports = async function usersSuite() {
     H.assert.equal(r.status, 400)
   })
 
+  await test('注册非字符串字段/数组请求 → 400，不能落入 bcrypt/数据库', async () => {
+    for (const body of [
+      { username: `invalid_${SEQ}`, password: 42 },
+      { username: ['invalid'], password: 'test123' },
+      [],
+    ]) H.assert.equal((await http('POST', '/users/register', { body })).status, 400)
+  })
+  await test('并发注册同名账号 → 200/409，唯一约束冲突不返回 500', async () => {
+    const username = `concurrent_user_${SEQ}`
+    const results = await Promise.all(Array.from({ length: 2 }, () => http('POST', '/users/register', {
+      body: { username, password: 'test123' },
+    })))
+    for (const r of results) if (r.status === 200 && r.data?.data?.id) created.users.push(r.data.data.id)
+    H.assert.deepEqual(results.map(r => r.status).sort((a, b) => a - b), [200, 409])
+    H.assert.equal(results.find(r => r.status === 409).data.message, '用户名已存在')
+    const [[{ count }]] = await pool.execute('SELECT COUNT(*) AS count FROM users WHERE username=?', [username])
+    H.assert.equal(count, 1)
+  })
+
   // ---- 登录 ----
   let loginToken = ''
   await test('登录成功返回 token/username/role', async () => {
@@ -58,6 +77,14 @@ module.exports = async function usersSuite() {
     const r = await http('POST', '/users/login', { body: { username: 'nobody_' + SEQ, password: 'x' } })
     H.assert.equal(r.status, 401)
     H.assert.equal(r.data.message, '用户名或密码错误')
+  })
+
+  await test('登录非字符串字段/数组请求 → 400', async () => {
+    for (const body of [
+      { username: uname, password: true },
+      { username: {}, password: 'test123' },
+      [],
+    ]) H.assert.equal((await http('POST', '/users/login', { body })).status, 400)
   })
 
   // ---- me ----
@@ -86,6 +113,50 @@ module.exports = async function usersSuite() {
   await test('bio 超 200 字 → 400（P1-1 修复）', async () => {
     const r = await http('PUT', '/users/me', { token: loginToken, body: { bio: 'x'.repeat(201) } })
     H.assert.equal(r.status, 400)
+  })
+  await test('资料字段类型错误 → 400，已保存资料不被改写', async () => {
+    const before = (await http('GET', '/users/me', { token: loginToken })).data.data
+    for (const body of [{ nickname: 3 }, { bio: [] }, { gender: {} }, { birthday: true }, []]) {
+      H.assert.equal((await http('PUT', '/users/me', { token: loginToken, body })).status, 400)
+    }
+    const after = (await http('GET', '/users/me', { token: loginToken })).data.data
+    for (const key of ['nickname', 'bio', 'gender', 'birthday']) H.assert.equal(after[key], before[key])
+  })
+  await test('生日拒绝不存在/非标准/未来日期，闰日往返保持东八区纯日期', async () => {
+    for (const birthday of ['2023-02-29', '2000-02-30', '0000-00-00', '2000-13-01', '2000-01-00', '2000-1-01', '9999-01-01']) {
+      H.assert.equal((await http('PUT', '/users/me', { token: loginToken, body: { birthday } })).status, 400)
+    }
+    H.assert.equal((await http('PUT', '/users/me', { token: loginToken, body: { birthday: '2000-02-29' } })).status, 200)
+    H.assert.equal((await http('GET', '/users/me', { token: loginToken })).data.data.birthday, '2000-02-29')
+    H.assert.equal((await http('PUT', '/users/me', { token: loginToken, body: { birthday: '2000-01-01' } })).status, 200)
+    H.assert.equal((await http('GET', '/users/me', { token: loginToken })).data.data.birthday, '2000-01-01')
+  })
+  await test('资料允许显式 null 清空昵称/简介/性别/生日，空日期也可以清空', async () => {
+    H.assert.equal((await http('PUT', '/users/me', { token: loginToken, body: {
+      nickname: null, bio: null, gender: null, birthday: null,
+    } })).status, 200)
+    const cleared = (await http('GET', '/users/me', { token: loginToken })).data.data
+    for (const key of ['nickname', 'bio', 'gender', 'birthday']) H.assert.equal(cleared[key], null)
+    H.assert.equal((await http('PUT', '/users/me', { token: loginToken, body: { nickname: '传火者', bio: '自我介绍', gender: '男', birthday: '' } })).status, 200)
+    H.assert.equal((await http('GET', '/users/me', { token: loginToken })).data.data.birthday, null)
+  })
+  await test('修改密码后旧 token 立即失效，新密码可登录', async () => {
+    const wrong = await http('PUT', '/users/me/password', {
+      token: loginToken,
+      body: { current_password: 'wrongpass', new_password: 'BetterPass!123' },
+    })
+    H.assert.equal(wrong.status, 400)
+    H.assert.equal((await http('GET', '/users/me', { token: loginToken })).status, 200)
+    const oldToken = loginToken
+    const changed = await http('PUT', '/users/me/password', {
+      token: loginToken,
+      body: { current_password: 'test123', new_password: 'BetterPass!123' },
+    })
+    H.assert.equal(changed.status, 200)
+    H.assert.equal((await http('GET', '/users/me', { token: oldToken })).status, 401)
+    const relogin = await http('POST', '/users/login', { body: { username: uname, password: 'BetterPass!123' } })
+    H.assert.equal(relogin.status, 200)
+    loginToken = relogin.data.data.token
   })
 
   // ---- 头像（含磁盘真实写入与去重）----
@@ -170,5 +241,7 @@ module.exports = async function usersSuite() {
     const data = await res.json()
     H.assert.equal(res.status, 200)
     H.assert.equal(data.code, 0)
+    H.assert.ok(res.headers.get('x-request-id'), '响应头应返回请求追踪 ID')
+    H.assert.equal(data.data.request_id, res.headers.get('x-request-id'))
   })
 }

@@ -1,27 +1,36 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import FollowLabel from '../components/FollowLabel.vue'
+import VideoCoverBadge from '../components/VideoCoverBadge.vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { toast } from '../utils/toast'
+import { errorMessage } from '../utils/errors'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { userApi, interactApi, postApi } from '../api'
 import { useLatestRequest } from '../composables/useLatestRequest'
+import type { Post, UserProfile } from '../types/api'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 
-const profile = ref<any>(null)
+const profile = ref<UserProfile | null>(null)
 const loading = ref(true)
 const notFound = ref(false)
+const loadError = ref('')
+const postsError = ref('')
 const avatarFailed = ref(false)
 const following = ref(false)
+const followBusy = ref(false)
 
-const posts = ref<any[]>([])
+const posts = ref<Post[]>([])
 const postPage = ref(1)
 const postTotal = ref(0)
 const postsLoading = ref(false)
 // 请求序号防竞态（useLatestRequest）：快速切换用户（/user/1 → /user/2）时，旧请求的响应回来后经序号比对直接丢弃，
 // 防止旧资料/旧文章列表覆盖新页面（原实现 loadPosts 用 postsLoading 直接 return，会把新用户的请求也丢掉）
 const { seq: latestSeq, next, isLatest } = useLatestRequest()
+onUnmounted(() => next())
 
 /** 是否自己的主页（展示编辑入口而非关注按钮） */
 const isSelf = computed(() => !!userStore.userInfo?.id && profile.value?.id === userStore.userInfo.id)
@@ -33,20 +42,26 @@ const roleLabel = computed(() => {
 
 async function load(id: number) {
   const seq = next()
+  avatarFailed.value = false
+  notFound.value = false
+  loadError.value = ''
+  postsError.value = ''
+  profile.value = null
   loading.value = true
   posts.value = []
   postTotal.value = 0
   following.value = false
   try {
-    const res: any = await userApi.getProfile(id)
+    const res = await userApi.getProfile(id)
     if (!isLatest(seq)) return // 已切换到其他用户，丢弃过期响应
     profile.value = res.data
     // 带 token 时后端返回 is_followed（公开接口可选鉴权，见 D19）
     following.value = !!res.data.is_followed
     loadPosts(id, 1)
-  } catch {
+  } catch (error: unknown) {
     if (!isLatest(seq)) return
-    notFound.value = true
+    notFound.value = (error as { response?: { status?: number } })?.response?.status === 404
+    if (!notFound.value) loadError.value = errorMessage(error, '资料加载失败，请重试')
   } finally {
     if (isLatest(seq)) loading.value = false
   }
@@ -69,6 +84,7 @@ watch(
     const id = +v
     notFound.value = false
     if (!Number.isInteger(id) || id < 1) {
+      next()
       notFound.value = true
       loading.value = false
       return
@@ -85,15 +101,16 @@ async function loadPosts(userId: number, page = 1, append = false) {
   const seq = latestSeq.value
   if (!isLatest(seq)) return // 用户已切换，不再发起过期请求
   postsLoading.value = true
+  postsError.value = ''
   try {
-    const res: any = await postApi.getList({ user_id: userId, page, pageSize: 10 })
+    const res = await postApi.getList({ user_id: userId, page, pageSize: 10 })
     if (!isLatest(seq)) return
     postPage.value = page
     postTotal.value = res.data.total || 0
     const list = res.data.list || []
     posts.value = append ? [...posts.value, ...list] : list
-  } catch {
-    /* 列表失败不阻塞主页信息展示 */
+  } catch (error: unknown) {
+    if (isLatest(seq)) postsError.value = errorMessage(error, '文章加载失败，请重试')
   } finally {
     if (isLatest(seq)) postsLoading.value = false
   }
@@ -101,10 +118,20 @@ async function loadPosts(userId: number, page = 1, append = false) {
 
 /** 关注/取消关注（POST /follows/:id 为 toggle，返回 following） */
 async function toggleFollow() {
-  if (!userStore.token) return router.push('/login')
-  const res: any = await interactApi.follow(profile.value.id)
-  following.value = res.data.following
-  profile.value.follower_count = Math.max(0, profile.value.follower_count + (following.value ? 1 : -1))
+  if (!userStore.token) return router.push({ path: '/login', query: { redirect: route.fullPath } })
+  if (!profile.value || followBusy.value) return
+  const id = profile.value.id
+  const seq = latestSeq.value
+  const session = userStore.token
+  const previous = following.value
+  followBusy.value = true
+  try {
+    const res = await interactApi.follow(id)
+    if (!isLatest(seq) || profile.value?.id !== id || session !== userStore.token) return
+    following.value = res.data.following
+    if (previous !== following.value) profile.value.follower_count = Math.max(0, profile.value.follower_count + (following.value ? 1 : -1))
+  } catch (e) { if (isLatest(seq)) toast(errorMessage(e, '关注操作失败，请重试'), 'error') }
+  finally { followBusy.value = false }
 }
 </script>
 
@@ -112,6 +139,9 @@ async function toggleFollow() {
   <div class="profile-page">
     <div v-if="loading" class="empty">加载中...</div>
     <div v-else-if="notFound" class="empty">用户不存在或已被删除</div>
+    <div v-else-if="loadError" class="empty" role="alert">
+      <p>{{ loadError }}</p><button class="load-more" @click="load(Number(route.params.id))">重新加载</button>
+    </div>
 
     <div v-else-if="profile" class="profile-wrap">
       <!-- 信息卡 -->
@@ -131,8 +161,8 @@ async function toggleFollow() {
             <div class="join-date">加入于 {{ profile.created_at?.slice(0, 10) }}</div>
           </div>
           <router-link v-if="isSelf" to="/me/edit" class="edit-btn">编辑资料</router-link>
-          <button v-else class="follow-btn" :class="{ followed: following }" @click="toggleFollow">
-            {{ following ? '已关注' : '关注' }}
+          <button v-else class="follow-btn" :disabled="followBusy" :class="{ followed: following }" @click="toggleFollow">
+            <FollowLabel :followed="following" />
           </button>
         </div>
       </div>
@@ -157,10 +187,13 @@ async function toggleFollow() {
       <div class="posts-section">
         <div class="section-title">{{ isSelf ? '我的文章' : 'TA 的文章' }}</div>
         <div v-if="postsLoading && !posts.length" class="empty">加载中...</div>
-        <div v-else-if="!posts.length" class="empty">还没有发布文章</div>
-        <div v-for="p in posts" :key="p.id" class="post-item" @click="router.push(`/post/${p.id}`)">
-          <div v-if="p.cover" class="post-cover"><img :src="p.cover" alt="封面" /></div>
-          <div v-else class="post-cover cover-placeholder">🗡️</div>
+        <div v-else-if="!posts.length && !postsError" class="empty">还没有发布文章</div>
+        <router-link v-for="p in posts" :key="p.id" :to="`/post/${p.id}`" class="post-item">
+          <div class="post-cover">
+            <img v-if="p.cover" :src="p.cover" alt="封面" />
+            <span v-else class="cover-placeholder">🗡️</span>
+            <VideoCoverBadge v-if="p.has_video" small />
+          </div>
           <div class="post-body">
             <div class="post-title">{{ p.title }}</div>
             <div class="post-badges">
@@ -174,9 +207,13 @@ async function toggleFollow() {
               <span class="post-time">{{ p.created_at?.slice(0, 10) }}</span>
             </div>
           </div>
+        </router-link>
+        <div v-if="postsError" class="empty" role="alert">
+          <p>{{ postsError }}</p>
+          <button class="load-more" :disabled="postsLoading" @click="loadPosts(profile.id, posts.length ? postPage + 1 : 1, !!posts.length)">重试加载文章</button>
         </div>
         <button
-          v-if="posts.length && posts.length < postTotal"
+          v-if="posts.length && posts.length < postTotal && !postsError"
           class="load-more"
           :disabled="postsLoading"
           @click="loadPosts(profile.id, postPage + 1, true)"
@@ -424,6 +461,7 @@ async function toggleFollow() {
   }
 }
 .post-cover {
+  position: relative;
   width: 110px;
   aspect-ratio: 16/9;
   flex-shrink: 0;

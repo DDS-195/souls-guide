@@ -20,13 +20,22 @@ async function unlinkUploads(url) {
   if (!url || typeof url !== 'string' || !url.startsWith('/uploads/')) return
   const abs = path.resolve(SERVER_ROOT, url.replace(/^\/+/, ''))
   if (!abs.startsWith(UPLOADS_DIR + path.sep)) return
-  try { await fs.promises.unlink(abs) } catch (e) { /* 文件已被删除/不存在，忽略 */ }
+  // 任何业务引用或尚未过期的资产登记存在时都不得删除物理文件。
+  // 这使旧调用方也具备共享 URL 保护，而不依赖调用者自己判断所有权。
+  const [[{ refs }]] = await pool.execute(
+    `SELECT
+      (SELECT COUNT(*) FROM upload_assets WHERE url=? AND status<>'deleted') +
+      (SELECT COUNT(*) FROM media WHERE url=?) +
+      (SELECT COUNT(*) FROM posts WHERE cover=?) +
+      (SELECT COUNT(*) FROM users WHERE avatar=?) +
+      (SELECT COUNT(*) FROM games WHERE cover=?) AS refs`,
+    [url, url, url, url, url]
+  )
+  if (Number(refs) > 0) return false
+  try { await fs.promises.unlink(abs) } catch (e) {
+    if (e.code !== 'ENOENT') return false // 权限/占用等暂时性失败保留清理任务，稍后重试。
+  }
+  return true
 }
 
-// 删除媒体：磁盘文件 + media 行（磁盘清理逻辑统一走 unlinkUploads）
-async function removeMedia(id, url) {
-  await unlinkUploads(url)
-  await pool.execute('DELETE FROM media WHERE id = ?', [id])
-}
-
-module.exports = { findMedia, removeMedia, unlinkUploads }
+module.exports = { findMedia, unlinkUploads }

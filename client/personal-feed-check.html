@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>个人攻略列表隔离验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h} from 'vue';import {createRouter,createMemoryHistory,RouterView} from 'vue-router';import {createPinia} from 'pinia';
+import MyLists from './src/views/MyLists.vue';import {useUserStore} from './src/stores/user';import {gameApi,interactApi} from './src/api';import './src/style.css';
+const games=[{id:1,name:'黑暗之魂',status:1},{id:2,name:'艾尔登法环',status:1},{id:3,name:'只狼',status:0}];
+const posts=[{id:19,title:'凝目戈夫开荒：先找距离，再找出手机会',game_id:1,game_name:'黑暗之魂',category:'BOSS攻略',tags:['开荒','翻滚'],nickname:'不贪刀的骑士',created_at:'2026-09-30',cover:'http://116.62.158.251/uploads/images/sg-demo-cover-ai-20260914-v1/cover-01.webp',view_count:23,like_count:2,comment_count:1}, {id:20,title:'一周目路线：几个容易错过的探索点',game_id:2,game_name:'艾尔登法环',category:'新手入门',tags:['探索'],nickname:'篝火旁的路人',created_at:'2026-09-29',view_count:10,like_count:1,comment_count:0}, {id:21,title:'打铁心得：把节奏练稳再考虑速通',game_id:3,game_name:'只狼',category:'BOSS攻略',tags:['弹反'],nickname:'苇名练习生',created_at:'2026-09-28',view_count:7,like_count:0,comment_count:0}];
+gameApi.getList=async()=>({data:games});
+const list=async params=>{const rows=posts.filter(p=>!params.game_id||p.game_id===params.game_id);return{data:{list:rows.slice((params.page-1)*params.pageSize,params.page*params.pageSize),total:rows.length}}};
+interactApi.getFavorites=list;interactApi.getFollowingFeed=list;interactApi.getFollowing=async()=>({data:{list:[{id:99,username:'knight',nickname:'不贪刀的骑士',followed_at:'2026-09-29'}],total:1}});
+const router=createRouter({history:createMemoryHistory(),routes:[{path:'/me/favorites',component:MyLists},{path:'/me/following',component:MyLists}]});
+const Root={render:()=>h('main',[h('nav',{style:'max-width:1000px;margin:auto;padding:16px;display:flex;gap:20px'},[h('button',{onClick:()=>router.push('/me/favorites')},'我的收藏'),h('button',{onClick:()=>router.push('/me/following')},'我的关注')]),h(RouterView)])};
+const app=createApp(Root);const pinia=createPinia();app.use(pinia).use(router);const user=useUserStore(pinia);user.userInfo={id:424243,username:'fixture',role:'user'};user.token='isolated-fixture';await router.push('/me/favorites');await router.isReady();app.mount('#app');
+</script></body></html>

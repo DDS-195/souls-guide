@@ -1,0 +1,11 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>写作本地验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h} from 'vue';import {createRouter,createMemoryHistory,RouterView} from 'vue-router';import {createPinia} from 'pinia';
+import Write from './src/views/creator/Write.vue';import {gameApi,postApi,mediaApi} from './src/api';import {useUserStore} from './src/stores/user';import './src/style.css';
+gameApi.getList=async()=>({data:[{id:1,name:'艾尔登法环',status:1}]});
+postApi.create=async()=>{throw new Error('模拟保存失败')};
+mediaApi.uploadImage=async()=>({data:{url:'/writing-fixture-image.svg'}});
+const router=createRouter({history:createMemoryHistory(),routes:[{path:'/creator/write',component:Write},{path:'/creator/posts',component:{render:()=>h('p','已离开编辑页')}}]});
+const pinia=createPinia();const app=createApp({render:()=>h('main',{style:'max-width:820px;padding:16px;margin:auto'},[h(RouterView)])});app.use(pinia).use(router);
+const store=useUserStore();store.token='isolated-fixture';store.userInfo={id:424244,username:'验收',role:'creator'};
+await router.push('/creator/write');await router.isReady();app.mount('#app');
+</script></body></html>

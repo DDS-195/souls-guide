@@ -1,15 +1,13 @@
 -- SoulsGuide 预设数据 v2.0（2026-08-07）
--- 权威来源：SoulsGuide-设计文档.md 3.2 / 3.14
--- 幂等设计：INSERT IGNORE 依赖 UNIQUE 约束（users.username / games.name），对已有数据的库重复执行安全
+-- 权威来源：SoulsGuide-设计文档.md 3.2
+-- 幂等设计：INSERT IGNORE 依赖 games.name UNIQUE 约束，对已有数据的库重复执行安全
 -- 用法：mysql -u root -p souls_guide < seed.sql
 -- 强制导入会话 utf8mb4（MySQL 镜像初始化默认 latin1 连接，中文会双倍转码乱码）
 SET NAMES utf8mb4;
 USE souls_guide;
 
--- 3.14.1 管理员账号（系统预设）
--- ⚠ 开发密码 admin123（文档外约定，2026-08-07 由后端 AI 生成哈希；生产环境必须改密）
-INSERT IGNORE INTO users (username, password, role, apply_status) VALUES
-('admin', '$2b$10$ZzwVdFP9qnBluTNG8oRGB.FuE8LVLyMD131oTNrCUSIsfLCsaJEqi', 'admin', 'approved');
+-- 管理员不再由 SQL 写入公开固定密码。
+-- 服务首次启动时读取 ADMIN_USERNAME / ADMIN_INITIAL_PASSWORD 创建；生产环境缺少强密码会拒绝启动。
 
 -- 3.2 游戏预设数据（7 条）
 INSERT IGNORE INTO games (name, description, sort_order) VALUES

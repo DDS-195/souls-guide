@@ -1,360 +1,323 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { adminApi } from '../../api'
+import AppEmpty from '../../components/AppEmpty.vue'
+import AppModal from '../../components/AppModal.vue'
+import AppPagination from '../../components/AppPagination.vue'
+import { usePagination } from '../../composables/usePagination'
+import type { Announcement, AnnouncementStatus } from '../../types/api'
+import { errorMessage } from '../../utils/errors'
 import { toast } from '../../utils/toast'
 
-const list = ref<any[]>([])
-const showForm = ref(false)
-const editing = ref<any>(null)
-const form = ref({ title: '', content: '' })
+type EditableForm = { title: string; content: string }
+
+const list = ref<Announcement[]>([])
+const loading = ref(true)
 const loadError = ref('')
+const statusFilter = ref<'all' | 'draft' | 'published' | 'archived'>('all')
+const { page, total, pageCount, pageSize, go } = usePagination(10)
 
-onMounted(load)
+const createOpen = ref(false)
+const createSaving = ref(false)
+const createForm = ref<EditableForm>({ title: '', content: '' })
+const editTarget = ref<Announcement | null>(null)
+const editSaving = ref(false)
+const editForm = ref<EditableForm>({ title: '', content: '' })
+const busyIds = ref<Set<number>>(new Set())
+let loadSequence = 0
 
-function errMsg(e: any, fallback: string) {
-  return e?.response?.data?.message || fallback
+const statusMap: Record<AnnouncementStatus, string> = {
+  draft: '草稿',
+  published: '当前生效',
+  archived: '已归档',
+  deleted: '已删除',
 }
 
 async function load() {
+  const sequence = ++loadSequence
+  loading.value = true
+  loadError.value = ''
   try {
-    const r = await adminApi.getAnnouncements()
-    list.value = r.data
-    loadError.value = ''
-  } catch (e: any) {
-    loadError.value = errMsg(e, '加载失败，请重试')
+    const status = statusFilter.value === 'all' ? undefined : statusFilter.value
+    const response = await adminApi.getAnnouncements({ page: page.value, pageSize, status })
+    if (sequence !== loadSequence) return
+    list.value = response.data.list || []
+    total.value = response.data.total || 0
+  } catch (requestError: unknown) {
+    if (sequence === loadSequence) loadError.value = errorMessage(requestError, '加载失败，请重试')
+  } finally {
+    if (sequence === loadSequence) loading.value = false
   }
+}
+
+onMounted(load)
+
+function changeFilter() {
+  page.value = 1
+  load()
+}
+
+function goPage(nextPage: number) {
+  if (go(nextPage)) load()
+}
+
+function normalized(form: EditableForm) {
+  const title = form.title.trim()
+  const content = form.content.trim()
+  if (!title || !content) {
+    toast('标题和内容不能为空', 'error')
+    return null
+  }
+  return { title, content }
 }
 
 function openCreate() {
-  editing.value = null
-  form.value = { title: '', content: '' }
-  showForm.value = true
+  createForm.value = { title: '', content: '' }
+  createOpen.value = true
 }
 
-function openEdit(a: any) {
-  editing.value = a.id
-  form.value = { title: a.title, content: a.content }
-}
-
-// 新增公告保存（openCreate 表单用；行内编辑走 saveEdit）
-async function save() {
-  if (!form.value.title) return
+async function saveCreate() {
+  const payload = normalized(createForm.value)
+  if (!payload || createSaving.value) return
+  createSaving.value = true
   try {
-    await adminApi.createAnnouncement(form.value)
-    showForm.value = false
-    toast('创建成功', 'success')
-    load()
-  } catch (e: any) {
-    toast(errMsg(e, '创建失败'), 'error')
+    await adminApi.createAnnouncement(payload)
+    createOpen.value = false
+    statusFilter.value = 'draft'
+    page.value = 1
+    toast('草稿已创建', 'success')
+    await load()
+  } catch (requestError: unknown) {
+    toast(errorMessage(requestError, '创建失败'), 'error')
+  } finally {
+    createSaving.value = false
   }
 }
 
-async function saveEdit(id: number) {
-  if (!form.value.title) return
+function openEdit(announcement: Announcement) {
+  if (announcement.status !== 'draft') return
+  editTarget.value = announcement
+  editForm.value = { title: announcement.title, content: announcement.content }
+}
+
+async function saveEdit() {
+  const target = editTarget.value
+  const payload = normalized(editForm.value)
+  if (!target || !payload || editSaving.value) return
+  editSaving.value = true
   try {
-    await adminApi.updateAnnouncement(id, form.value)
-    editing.value = null
-    toast('已保存', 'success')
-    load()
-  } catch (e: any) {
-    toast(errMsg(e, '保存失败'), 'error')
+    await adminApi.updateAnnouncement(target.id, { ...payload, version: target.version })
+    editTarget.value = null
+    toast('草稿已保存', 'success')
+    await load()
+  } catch (requestError: unknown) {
+    toast(errorMessage(requestError, '保存失败'), 'error')
+    await load()
+  } finally {
+    editSaving.value = false
   }
 }
 
-async function publish(id: number) {
+function setBusy(id: number, busy: boolean) {
+  const next = new Set(busyIds.value)
+  if (busy) next.add(id)
+  else next.delete(id)
+  busyIds.value = next
+}
+
+async function runAction(id: number, action: () => Promise<void>) {
+  if (busyIds.value.has(id)) return
+  setBusy(id, true)
   try {
-    await adminApi.publishAnnouncement(id)
-    toast('已发布', 'success')
-    load()
-  } catch (e: any) {
-    toast(errMsg(e, '发布失败'), 'error')
+    await action()
+  } finally {
+    setBusy(id, false)
   }
 }
 
-async function archive(id: number) {
-  try {
-    await adminApi.archiveAnnouncement(id)
-    toast('已归档', 'success')
-    load()
-  } catch (e: any) {
-    toast(errMsg(e, '归档失败'), 'error')
-  }
+function publish(announcement: Announcement) {
+  if (!window.confirm(`发布《${announcement.title}》？当前生效公告会自动归档，发布后的正文不可原地修改。`)) return
+  runAction(announcement.id, async () => {
+    try {
+      await adminApi.publishAnnouncement(announcement.id)
+      toast('公告已发布', 'success')
+      await load()
+    } catch (requestError: unknown) {
+      toast(errorMessage(requestError, '发布失败'), 'error')
+    }
+  })
 }
 
-async function remove(id: number) {
-  try {
-    await adminApi.deleteAnnouncement(id)
-    toast('已删除', 'success')
-    load()
-  } catch (e: any) {
-    toast(errMsg(e, '删除失败'), 'error')
-  }
+function archive(announcement: Announcement) {
+  if (!window.confirm(`归档《${announcement.title}》？归档后全站将不再展示该公告。`)) return
+  runAction(announcement.id, async () => {
+    try {
+      await adminApi.archiveAnnouncement(announcement.id)
+      toast('公告已归档', 'success')
+      await load()
+    } catch (requestError: unknown) {
+      toast(errorMessage(requestError, '归档失败'), 'error')
+    }
+  })
 }
 
-const statusMap: any = { published: '已发布', draft: '草稿', archived: '已归档' }
+function cloneAsDraft(announcement: Announcement) {
+  runAction(announcement.id, async () => {
+    try {
+      await adminApi.cloneAnnouncement(announcement.id)
+      statusFilter.value = 'draft'
+      page.value = 1
+      toast('已复制为新草稿，可安全修改后重新发布', 'success')
+      await load()
+    } catch (requestError: unknown) {
+      toast(errorMessage(requestError, '复制失败'), 'error')
+    }
+  })
+}
+
+function removeDraft(announcement: Announcement) {
+  if (!window.confirm(`删除草稿《${announcement.title}》？该操作会保留审计快照，但草稿将不再显示。`)) return
+  runAction(announcement.id, async () => {
+    try {
+      await adminApi.deleteAnnouncement(announcement.id)
+      toast('草稿已删除', 'success')
+      if (list.value.length === 1 && page.value > 1) page.value -= 1
+      await load()
+    } catch (requestError: unknown) {
+      toast(errorMessage(requestError, '删除失败'), 'error')
+    }
+  })
+}
 </script>
 
 <template>
-  <div style="max-width: 900px; margin: 0 auto; padding: 20px; color: var(--text-primary)">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px">
-      <h2 style="font-family: Cinzel, serif; color: var(--amber)">公告管理</h2>
-      <button class="btn-amber" @click="openCreate">新增公告</button>
+  <main class="announcement-page">
+    <header class="page-header">
+      <div>
+        <h2>公告管理</h2>
+        <p>草稿可编辑；发布版本冻结。修订历史公告时，请复制为新草稿。</p>
+      </div>
+      <button class="btn primary" @click="openCreate">新增草稿</button>
+    </header>
+
+    <section class="policy-note">
+      <strong>发布规则：</strong>全站同时只展示一条公告。发布新草稿会自动归档旧公告，归档不会删除历史内容。
+    </section>
+
+    <div class="toolbar">
+      <label for="announcement-status">状态</label>
+      <select id="announcement-status" v-model="statusFilter" @change="changeFilter">
+        <option value="all">全部</option>
+        <option value="draft">草稿</option>
+        <option value="published">当前生效</option>
+        <option value="archived">已归档</option>
+      </select>
+      <span>{{ total }} 条</span>
+      <button class="btn quiet" :disabled="loading" @click="load">刷新</button>
     </div>
 
-    <!-- 加载错误态 -->
-    <div v-if="loadError" style="text-align: center; padding: 60px; color: var(--text-muted)">
-      <div style="margin-bottom: 12px">{{ loadError }}</div>
-      <button
-        style="
-          padding: 6px 16px;
-          background: var(--bg-card);
-          border: 1px solid var(--border-subtle);
-          border-radius: 6px;
-          color: var(--text-secondary);
-          cursor: pointer;
-          font-size: 0.8rem;
-          font-family: inherit;
-        "
-        @click="load"
-      >
-        重新加载
-      </button>
-    </div>
+    <AppEmpty
+      v-if="loading || loadError || !list.length"
+      :loading="loading"
+      :error="loadError"
+      empty-text="暂无公告"
+      icon="📢"
+      @retry="load"
+    />
 
-    <!-- 编辑表单 -->
-    <div
-      v-if="showForm"
-      style="
-        margin-bottom: 20px;
-        padding: 20px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-subtle);
-        border-radius: 10px;
-      "
-    >
-      <h4 style="margin-bottom: 12px; color: var(--amber)">{{ editing ? '编辑公告' : '新增公告' }}</h4>
-      <input
-        v-model="form.title"
-        placeholder="公告标题"
-        style="
-          width: 100%;
-          padding: 10px;
-          background: var(--bg-sidebar);
-          border: 1px solid var(--border-subtle);
-          border-radius: 8px;
-          color: var(--text-primary);
-          margin-bottom: 8px;
-          font-family: inherit;
-        "
-      />
-      <textarea
-        v-model="form.content"
-        placeholder="公告内容"
-        rows="4"
-        style="
-          width: 100%;
-          padding: 10px;
-          background: var(--bg-sidebar);
-          border: 1px solid var(--border-subtle);
-          border-radius: 8px;
-          color: var(--text-primary);
-          font-family: inherit;
-          resize: vertical;
-          margin-bottom: 8px;
-        "
-      ></textarea>
-      <div style="display: flex; gap: 8px">
-        <button class="btn-amber" @click="save">保存</button>
-        <button
-          style="
-            padding: 8px 20px;
-            background: var(--bg-card);
-            border: 1px solid var(--border-subtle);
-            border-radius: 6px;
-            color: var(--text-secondary);
-            cursor: pointer;
-          "
-          @click="showForm = false"
-        >
-          取消
-        </button>
-      </div>
-    </div>
+    <section v-if="!loading && !loadError && list.length" class="announcement-list">
+      <article v-for="announcement in list" :key="announcement.id" class="announcement-card">
+        <div class="card-main">
+          <div class="title-row">
+            <h3>{{ announcement.title }}</h3>
+            <span class="status-tag" :class="announcement.status">{{ statusMap[announcement.status] }}</span>
+            <span class="version">v{{ announcement.version }}</span>
+          </div>
+          <p class="content-preview">{{ announcement.content }}</p>
+          <div class="metadata">
+            <span>创建者：{{ announcement.author_username || `#${announcement.author_id}` }}</span>
+            <span>创建：{{ announcement.created_at?.replace('T', ' ').slice(0, 16) }}</span>
+            <span v-if="announcement.published_at">发布：{{ announcement.published_at.replace('T', ' ').slice(0, 16) }}</span>
+            <span v-if="announcement.source_id">源公告：#{{ announcement.source_id }}</span>
+          </div>
+        </div>
+        <div class="actions">
+          <template v-if="announcement.status === 'draft'">
+            <button class="btn quiet" :disabled="busyIds.has(announcement.id)" @click="openEdit(announcement)">编辑</button>
+            <button class="btn primary" :disabled="busyIds.has(announcement.id)" @click="publish(announcement)">发布</button>
+            <button class="btn danger" :disabled="busyIds.has(announcement.id)" @click="removeDraft(announcement)">删除</button>
+          </template>
+          <template v-else>
+            <button class="btn quiet" :disabled="busyIds.has(announcement.id)" @click="cloneAsDraft(announcement)">复制为草稿</button>
+            <button
+              v-if="announcement.status === 'published'"
+              class="btn danger"
+              :disabled="busyIds.has(announcement.id)"
+              @click="archive(announcement)"
+            >归档</button>
+          </template>
+        </div>
+      </article>
+      <AppPagination :page="page" :page-count="pageCount" @change="goPage" />
+    </section>
 
-    <!-- 列表 -->
-    <div
-      v-for="a in list"
-      :key="a.id"
-      style="
-        padding: 14px 16px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-subtle);
-        border-radius: 8px;
-        margin-bottom: 8px;
-      "
-    >
-      <!-- 编辑模式 -->
-      <div v-if="editing === a.id">
-        <input
-          v-model="form.title"
-          style="
-            width: 100%;
-            padding: 8px;
-            background: var(--bg-sidebar);
-            border: 1px solid var(--border-subtle);
-            border-radius: 6px;
-            color: var(--text-primary);
-            margin-bottom: 6px;
-            font-family: inherit;
-          "
-        />
-        <textarea
-          v-model="form.content"
-          rows="3"
-          style="
-            width: 100%;
-            padding: 8px;
-            background: var(--bg-sidebar);
-            border: 1px solid var(--border-subtle);
-            border-radius: 6px;
-            color: var(--text-primary);
-            font-family: inherit;
-            resize: vertical;
-            margin-bottom: 6px;
-          "
-        ></textarea>
-        <div style="display: flex; gap: 6px">
-          <button class="btn-green" @click="saveEdit(a.id)">保存</button>
-          <button
-            style="
-              padding: 6px 16px;
-              background: var(--bg-card);
-              border: 1px solid var(--border-subtle);
-              border-radius: 5px;
-              color: var(--text-secondary);
-              cursor: pointer;
-              font-size: 0.8rem;
-            "
-            @click="editing = null"
-          >
-            取消
-          </button>
-        </div>
+    <AppModal :open="Boolean(createOpen)" title="新增公告草稿" @close="createOpen = false"><template v-if="createOpen">
+      <label class="field-label" for="create-announcement-title">标题</label>
+      <input id="create-announcement-title" v-model="createForm.title" maxlength="200" class="field" />
+      <label class="field-label" for="create-announcement-content">正文</label>
+      <textarea id="create-announcement-content" v-model="createForm.content" rows="7" class="field"></textarea>
+      <div class="modal-actions">
+        <button class="btn quiet" :disabled="createSaving" @click="createOpen = false">取消</button>
+        <button class="btn primary" :disabled="createSaving" @click="saveCreate">{{ createSaving ? '保存中…' : '保存草稿' }}</button>
       </div>
-      <!-- 查看模式 -->
-      <div v-else style="display: flex; justify-content: space-between; align-items: flex-start">
-        <div style="flex: 1">
-          <div style="display: flex; align-items: center; gap: 8px">
-            <span style="font-weight: 600">{{ a.title }}</span>
-            <span class="status-tag" :class="a.status === 'published' ? 'on' : 'off'">{{ statusMap[a.status] }}</span>
-          </div>
-          <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px">
-            {{ a.content?.slice(0, 80) }}{{ a.content?.length > 80 ? '...' : '' }}
-          </div>
-          <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px">
-            {{ a.created_at?.slice(0, 10) }}
-          </div>
-        </div>
-        <div style="display: flex; gap: 6px; flex-shrink: 0">
-          <button
-            style="
-              padding: 4px 10px;
-              background: var(--bg-card);
-              border: 1px solid var(--border-subtle);
-              border-radius: 5px;
-              color: var(--text-secondary);
-              cursor: pointer;
-              font-size: 0.75rem;
-            "
-            @click="openEdit(a)"
-          >
-            编辑
-          </button>
-          <button v-if="a.status !== 'published'" class="btn-amber-ghost" @click="publish(a.id)">发布</button>
-          <button
-            v-if="a.status === 'published'"
-            style="
-              padding: 4px 10px;
-              background: var(--bg-card);
-              border: 1px solid var(--border-subtle);
-              border-radius: 5px;
-              color: var(--text-muted);
-              cursor: pointer;
-              font-size: 0.75rem;
-            "
-            @click="archive(a.id)"
-          >
-            归档
-          </button>
-          <button
-            style="
-              padding: 4px 10px;
-              background: var(--bg-card);
-              border: 1px solid var(--border-subtle);
-              border-radius: 5px;
-              color: var(--red);
-              cursor: pointer;
-              font-size: 0.75rem;
-            "
-            @click="remove(a.id)"
-          >
-            删除
-          </button>
-        </div>
+    </template></AppModal>
+
+    <AppModal :open="Boolean(editTarget)" title="编辑公告草稿" @close="editTarget = null"><template v-if="editTarget">
+      <label class="field-label" for="edit-announcement-title">标题</label>
+      <input id="edit-announcement-title" v-model="editForm.title" maxlength="200" class="field" />
+      <label class="field-label" for="edit-announcement-content">正文</label>
+      <textarea id="edit-announcement-content" v-model="editForm.content" rows="7" class="field"></textarea>
+      <div class="modal-actions">
+        <button class="btn quiet" :disabled="editSaving" @click="editTarget = null">取消</button>
+        <button class="btn primary" :disabled="editSaving" @click="saveEdit">{{ editSaving ? '保存中…' : '保存修改' }}</button>
       </div>
-    </div>
-  </div>
+    </template></AppModal>
+  </main>
 </template>
 
 <style scoped>
-.btn-amber {
-  padding: 8px 18px;
-  background: var(--amber);
-  border: none;
-  border-radius: 8px;
-  color: var(--on-amber);
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 0.85rem;
-}
-.btn-amber:hover {
-  background: var(--amber-dim);
-}
-.btn-green {
-  padding: 6px 16px;
-  background: var(--green);
-  border: none;
-  border-radius: 5px;
-  color: #fff;
-  cursor: pointer;
-  font-size: 0.8rem;
-}
-.btn-green:hover {
-  opacity: 0.85;
-}
-.btn-amber-ghost {
-  padding: 4px 10px;
-  background: rgba(232, 168, 56, 0.12);
-  border: 1px solid rgba(232, 168, 56, 0.2);
-  border-radius: 5px;
-  color: var(--amber);
-  cursor: pointer;
-  font-size: 0.75rem;
-}
-.btn-amber-ghost:hover {
-  background: rgba(232, 168, 56, 0.25);
-}
-.status-tag {
-  padding: 1px 8px;
-  border-radius: 4px;
-  font-size: 0.65rem;
-}
-.status-tag.on {
-  background: rgba(90, 158, 111, 0.15);
-  color: var(--green);
-}
-.status-tag.off {
-  background: var(--bg-hover);
-  color: var(--text-muted);
+.announcement-page { max-width: 980px; margin: 0 auto; padding: 24px 18px 48px; color: var(--text-primary); }
+.page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 18px; }
+.page-header h2 { margin: 0; color: var(--amber); font-family: Cinzel, serif; }
+.page-header p { margin: 6px 0 0; color: var(--text-muted); font-size: .8rem; }
+.policy-note { padding: 12px 14px; margin-bottom: 14px; border: 1px solid rgba(232,168,56,.25); border-radius: 8px; background: var(--amber-glow); color: var(--text-secondary); font-size: .8rem; }
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--text-muted); font-size: .78rem; }
+.toolbar select { padding: 7px 28px 7px 10px; color: var(--text-primary); background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.toolbar span { margin-left: auto; }
+.announcement-list { display: grid; gap: 10px; }
+.announcement-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 16px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.card-main { flex: 1; min-width: 0; }
+.title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.title-row h3 { margin: 0; font-size: .96rem; }
+.status-tag, .version { padding: 2px 8px; border-radius: 999px; font-size: .66rem; }
+.status-tag.draft { color: var(--text-secondary); background: var(--bg-hover); }
+.status-tag.published { color: var(--green); background: rgba(80,180,120,.12); }
+.status-tag.archived { color: var(--text-muted); background: var(--bg-hover); }
+.version { color: var(--amber); border: 1px solid rgba(232,168,56,.25); }
+.content-preview { display: -webkit-box; overflow: hidden; margin: 9px 0; color: var(--text-secondary); font-size: .82rem; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.metadata { display: flex; flex-wrap: wrap; gap: 12px; color: var(--text-muted); font-size: .68rem; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; flex-shrink: 0; }
+.btn { padding: 7px 14px; border: 1px solid transparent; border-radius: 7px; cursor: pointer; font: inherit; font-size: .78rem; transition: opacity var(--transition-fast); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { color: var(--on-amber); background: var(--amber); font-weight: 600; }
+.btn.quiet { color: var(--text-secondary); background: var(--bg-card); border-color: var(--border-subtle); }
+.btn.danger { color: var(--red); background: var(--bg-card); border-color: rgba(190,70,70,.3); }
+.field-label { display: block; margin: 10px 0 5px; color: var(--text-secondary); font-size: .76rem; }
+.field { width: 100%; box-sizing: border-box; padding: 9px 10px; color: var(--text-primary); background: var(--bg-sidebar); border: 1px solid var(--border-subtle); border-radius: 7px; font: inherit; resize: vertical; }
+.field:focus { outline: none; border-color: var(--amber); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+@media (max-width: 700px) {
+  .page-header, .announcement-card { flex-direction: column; }
+  .actions { width: 100%; justify-content: flex-start; }
 }
 </style>

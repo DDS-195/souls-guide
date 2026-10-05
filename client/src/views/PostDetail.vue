@@ -1,53 +1,158 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, provide, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { commentStateKey, type CommentState } from '../composables/commentState'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { postApi, interactApi } from '../api'
 import PostBody from '../components/PostBody.vue'
+import CommentItem from '../components/CommentItem.vue'
 import { toast } from '../utils/toast'
+import { errorMessage, errorStatus } from '../utils/errors'
+import { getAnalyticsVisitorId } from '../utils/analytics'
+import { historyKey } from '../utils/history'
+import { copyText } from '../utils/clipboard'
+import { animateComment, playFeedback } from '../utils/motion'
+import { playArticleArrival } from '../utils/articleMotion'
+import type { Comment, HistorySnapshot, Post } from '../types/api'
+import AppPagination from '../components/AppPagination.vue'
+import { usePagination } from '../composables/usePagination'
+import MotionCount from '../components/MotionCount.vue'
+import FollowLabel from '../components/FollowLabel.vue'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
-const post = ref<any>(null)
+const commentStates = reactive(new Map<number, CommentState>())
+provide(commentStateKey, commentStates)
+let statePostId = ''
+const post = ref<Post | null>(null)
+const articleTitle = ref<HTMLElement | null>(null)
 const loadError = ref('')
 const liked = ref(false)
 const favorited = ref(false)
-const comments = ref<any[]>([])
+const likeIcon = ref<SVGElement | null>(null)
+const favoriteIcon = ref<SVGElement | null>(null)
+const comments = ref<Comment[]>([])
+const animateComments = ref(false)
+let commentMotionTimer: number | undefined
 const commentText = ref('')
 const followed = ref(false)
 const avatarFailed = ref(false)
-const commentAvatarFailed = ref<Set<number>>(new Set())
+let viewTimer: number | null = null
+const {
+  page: commentPage,
+  total: commentTotal,
+  pageCount: commentPageCount,
+  pageSize: commentPageSize,
+  reset: resetComments,
+  go: goCommentPage,
+} = usePagination(20)
 
-onMounted(async () => {
-  const id = +route.params.id
+let detailSequence = 0
+let commentsSequence = 0
+const commentsLoading = ref(false)
+const commentsError = ref('')
+const busy = ref<Record<string, boolean>>({})
+const statusReady = ref(false)
+const statusLoading = ref(false)
+const statusError = ref(false)
+let viewReported = false
+function scheduleView() {
+  if (viewTimer !== null) window.clearTimeout(viewTimer)
+  viewTimer = null
+  if (!post.value || viewReported || document.visibilityState !== 'visible') return
+  const id = post.value.id
+  const seq = detailSequence
+  viewTimer = window.setTimeout(async () => {
+    if (seq !== detailSequence || document.visibilityState !== 'visible') return
+    viewReported = true
+    try {
+      const result = await postApi.recordView(id, getAnalyticsVisitorId())
+      if (seq === detailSequence && post.value?.id === id) post.value.view_count = result.data.view_count
+    } catch { /* 统计失败不影响阅读，也不自动重复提交。 */ }
+  }, 1500)
+}
+function login() { return router.push({ path: '/login', query: { redirect: route.fullPath } }) }
+async function loadStatus(id: number, seq: number) {
+  if (statusLoading.value) return
+  statusLoading.value = true
+  statusError.value = false
   try {
-    const promises: any[] = [postApi.getDetail(id), postApi.getComments(id)]
-    if (userStore.token)
-      promises.push(
-        postApi.getStatus(id).catch(() => ({ data: { liked: false, favorited: false, is_followed: false } })),
-      )
-    const [postRes, commentRes, statusRes] = await Promise.all(promises)
+    if (!userStore.token) { statusReady.value = true; return }
+    const res = await postApi.getStatus(id)
+    if (seq !== detailSequence) return
+    liked.value = res.data.liked
+    favorited.value = res.data.favorited
+    followed.value = res.data.is_followed
+    statusReady.value = true
+  } catch { if (seq === detailSequence) statusError.value = true }
+  finally { if (seq === detailSequence) statusLoading.value = false }
+}
+async function loadDetail() {
+  animateComments.value = false
+  if (statePostId !== String(route.params.id)) {
+    commentStates.clear()
+    statePostId = String(route.params.id)
+  }
+  const seq = ++detailSequence
+  viewReported = false
+  ++commentsSequence
+  if (viewTimer !== null) window.clearTimeout(viewTimer)
+  post.value = null
+  loadError.value = ''
+  comments.value = []
+  commentText.value = ''
+  commentTotal.value = 0
+  commentPage.value = 1
+  liked.value = favorited.value = followed.value = false
+  avatarFailed.value = false
+  statusReady.value = false
+  statusLoading.value = false
+  statusError.value = false
+  const id = +route.params.id
+  const targetPage = Number(route.query.comment_page)
+  if (Number.isSafeInteger(targetPage) && targetPage > 0) commentPage.value = targetPage
+  try {
+    const postRes = await postApi.getDetail(id)
+    if (seq !== detailSequence) return
     post.value = postRes.data
-    comments.value = commentRes.data
-    if (statusRes) {
-      liked.value = statusRes.data.liked
-      favorited.value = statusRes.data.favorited
-      followed.value = statusRes.data.is_followed
-    }
-  } catch (e: any) {
+    void loadStatus(id, seq)
+    void loadComments(Number(route.query.comment_id)).then(async () => {
+      if (seq !== detailSequence) return
+      const targetComment = Number(route.query.comment_id)
+      if (Number.isSafeInteger(targetComment) && targetComment > 0) {
+        await nextTick()
+        const element = document.getElementById('comment-' + targetComment)
+        if (element) {
+          element.scrollIntoView({ block: 'center' })
+          element.focus({ preventScroll: true })
+        } else if (!commentsError.value) toast('评论位置已变化或暂不可定位，请在评论区查看', 'info')
+      }
+    })
+    // 内容成功渲染并停留后再上报有效阅读；详情 GET 本身不再产生统计副作用。
+    await nextTick()
+    if (seq !== detailSequence) return
+    playArticleArrival(id, articleTitle.value)
+    scheduleView()
+  } catch (error: unknown) {
     // 文章不存在（404）/网络错误：显示错误态而非永久白屏（原实现无 catch）
-    loadError.value = e?.response?.status === 404 ? '文章不存在或已被删除' : '加载失败，请检查网络后重试'
+    if (seq !== detailSequence) return
+    loadError.value = errorStatus(error) === 404 ? '文章不存在或已被删除' : '加载失败，请检查网络后重试'
     return
   }
-  // 浏览历史快照写入：localStorage 可能被外部损坏（JSON 解析失败），写入失败不影响详情展示
+}
+function recordHistory() {
+  const d = post.value
+  if (!d || (userStore.token && !userStore.userInfo?.id)) return
+  const id = d.id
+  const historyAccount = userStore.userInfo?.id
+  // 登录资料尚未恢复时不写游客历史，恢复后由 watcher 补记。
   try {
-    const raw = localStorage.getItem('viewHistory')
-    const history = raw ? JSON.parse(raw) : []
-    const filtered = history.filter((h: any) => h.id !== id)
+    const raw = localStorage.getItem(historyKey(historyAccount))
+    const history = (raw ? JSON.parse(raw) : []) as HistorySnapshot[]
+    const filtered = history.filter((item) => item.id !== id)
     // 历史卡片化（2026-08-09 用户批准方案）：存卡片字段快照（不含 content），供历史页渲染兜底；
     // 头像/封面等实时数据由历史页用 GET /posts?ids= 批量补齐（发布者换头像后仍显示当前头像）
-    const d = post.value
     filtered.unshift({
       id,
       title: d.title,
@@ -60,48 +165,122 @@ onMounted(async () => {
       view_count: d.view_count,
       like_count: d.like_count,
       comment_count: d.comment_count,
-      username: d.username,
+      username: d.username || '匿名',
       user_id: d.user_id,
-      avatar: d.avatar,
+      avatar: d.avatar || null,
     })
-    localStorage.setItem('viewHistory', JSON.stringify(filtered.slice(0, 50)))
+    localStorage.setItem(historyKey(historyAccount), JSON.stringify(filtered.slice(0, 50)))
   } catch {
     /* 历史写入失败不影响详情展示 */
   }
-})
+}
+watch(() => [post.value?.id, userStore.userInfo?.id, userStore.token], recordHistory)
+watch(() => [route.params.id, route.query.comment_page, route.query.comment_id], loadDetail, { immediate: true })
 
-/** 统计嵌套评论树节点总数（评论 + 全部回复）——与后端 comment_count 语义一致（addComment 对回复同样 +1） */
-function countTree(list: any[]): number {
-  return list.reduce((n, c) => n + 1 + countTree(c.replies || []), 0)
+async function loadComments(focus?: number) {
+  if (!post.value) return
+  const seq = ++commentsSequence
+  const id = post.value.id
+  commentsLoading.value = true
+  commentsError.value = ''
+  try {
+    const r = await postApi.getComments(id, { page: commentPage.value, pageSize: commentPageSize, focus_id: focus && Number.isSafeInteger(focus) && focus > 0 ? focus : undefined })
+    if (seq !== commentsSequence || post.value?.id !== id) return
+    commentTotal.value = r.data.total
+    commentPage.value = r.data.page
+    if (commentPage.value > commentPageCount.value) {
+      commentPage.value = commentPageCount.value
+      await loadComments()
+      return
+    }
+    comments.value = r.data.list
+  } catch (e) {
+    if (seq === commentsSequence) commentsError.value = errorMessage(e, '评论加载失败，请重试')
+  } finally { if (seq === commentsSequence) commentsLoading.value = false }
+}
+async function runAction(key: string, action: (id: number) => Promise<void>) {
+  if (!userStore.token) { await login(); return }
+  if (!post.value || busy.value[key]) return
+  busy.value[key] = true
+  try { await action(post.value.id) }
+  catch (e) { toast(errorMessage(e, '操作失败，请重试'), 'error') }
+  finally { busy.value[key] = false }
+}
+async function refreshCommentsWithMotion(focus?: number) {
+  animateComments.value = true
+  window.clearTimeout(commentMotionTimer)
+  try { await loadComments(focus) }
+  finally {
+    await nextTick()
+    commentMotionTimer = window.setTimeout(() => { animateComments.value = false }, 350)
+  }
+}
+async function replyToComment(commentId: number, content: string, done: (ok: boolean) => void) {
+  let success = false
+  await runAction('reply-' + commentId, async (id) => {
+    const result = await postApi.replyComment(commentId, content)
+    success = true
+    done(true)
+    if (post.value?.id !== id) return
+    post.value.comment_count += 1
+    await refreshCommentsWithMotion(result.data.id)
+    if (post.value?.id === id) toast('回复已发送', 'success')
+  })
+  if (!success) done(false)
 }
 
 async function toggleLike() {
-  if (!userStore.token) return router.push('/login')
-  const res: any = await postApi.like(post.value.id)
-  liked.value = res.data.liked
-  post.value.like_count += liked.value ? 1 : -1
+  await runAction('like', async id => {
+    const res = await postApi.like(id)
+    if (post.value?.id !== id) return
+    liked.value = res.data.liked
+    post.value.like_count = res.data.like_count
+    if (res.data.liked) playFeedback(likeIcon.value, 'confirm')
+  })
 }
 async function toggleFav() {
-  if (!userStore.token) return router.push('/login')
-  const res: any = await postApi.favorite(post.value.id)
-  favorited.value = res.data.favorited
+  await runAction('favorite', async id => {
+    const res = await postApi.favorite(id)
+    if (post.value?.id !== id) return
+    favorited.value = res.data.favorited
+    post.value.favorite_count = res.data.favorite_count
+    if (res.data.favorited) playFeedback(favoriteIcon.value, 'confirm')
+  })
 }
-/** 关注/取消关注（POST /follows/:id 为 toggle，返回 following） */
 async function toggleFollow() {
-  if (!userStore.token) return router.push('/login')
-  const res: any = await interactApi.follow(post.value.user_id)
-  followed.value = res.data.following
+  await runAction('follow', async id => {
+    const res = await interactApi.follow(post.value!.user_id)
+    if (post.value?.id === id) followed.value = res.data.following
+  })
 }
-
 async function submitComment() {
-  if (!commentText.value.trim() || !userStore.token) return
-  await postApi.addComment(post.value.id, { content: commentText.value })
-  commentText.value = ''
-  const r = await postApi.getComments(post.value.id)
-  comments.value = r.data
-  post.value.comment_count = countTree(comments.value)
+  if (!userStore.token) { await login(); return }
+  const content = commentText.value.trim()
+  if (!content) return
+  await runAction('comment', async id => {
+    const result = await postApi.addComment(id, { content })
+    if (post.value?.id !== id) return
+    if (commentText.value.trim() === content) commentText.value = ''
+    post.value.comment_count += 1
+    resetComments()
+    await refreshCommentsWithMotion(result.data.id)
+  })
 }
-
+function focusComments() {
+  document.querySelector<HTMLInputElement>('.comment-input-wrap input')?.focus()
+  document.querySelector('.comments-section')?.scrollIntoView({ block: 'start' })
+}
+function changeCommentPage(n: number) { if (goCommentPage(n)) void loadComments() }
+async function deleteComment(commentId: number) {
+  if (!window.confirm('确认删除这条评论及其回复吗？')) return
+  await runAction('delete-' + commentId, async id => {
+    const result = await postApi.deleteComment(commentId)
+    if (post.value?.id !== id) return
+    post.value.comment_count = result.data.comment_count
+    await refreshCommentsWithMotion()
+    toast('评论已删除', 'success')
+  })
+}
 /* —— 正文右上角「...」菜单：举报（2026-08-08 新增，契约 POST /api/reports） —— */
 const menuOpen = ref(false)
 const reporting = ref(false)
@@ -117,8 +296,18 @@ function onDocClick(e: MouseEvent) {
     reporting.value = false
   }
 }
-onMounted(() => document.addEventListener('click', onDocClick))
-onUnmounted(() => document.removeEventListener('click', onDocClick))
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+  document.addEventListener('visibilitychange', scheduleView)
+})
+onUnmounted(() => {
+  window.clearTimeout(commentMotionTimer)
+  ++detailSequence
+  ++commentsSequence
+  document.removeEventListener('click', onDocClick)
+  document.removeEventListener('visibilitychange', scheduleView)
+  if (viewTimer !== null) window.clearTimeout(viewTimer)
+})
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value
@@ -134,18 +323,10 @@ function openReport() {
 async function sharePost() {
   const url = window.location.href
   try {
-    await navigator.clipboard.writeText(url)
+    await copyText(url)
     toast('链接已复制，快去分享吧', 'success')
   } catch {
-    // 兜底（非 HTTPS 环境等）：textarea + execCommand
-    const ta = document.createElement('textarea')
-    ta.value = url
-    ta.style.cssText = 'position:fixed;opacity:0;'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-    toast('链接已复制，快去分享吧', 'success')
+    toast('复制失败，请手动复制地址栏链接', 'error')
   } finally {
     menuOpen.value = false
   }
@@ -155,21 +336,21 @@ async function submitReport() {
   if (!reportType.value) return toast('请选择举报类型', 'error')
   if (!reportReason.value.trim()) return toast('请填写举报原因', 'error')
   if (!userStore.token) return router.push({ path: '/login', query: { redirect: route.fullPath } })
-  try {
+  if (!post.value) return
+  await runAction('report', async id => {
     // 类型以 [类型] 前缀合入 reason 提交（reports 表冻结，不加列，R4）
     await interactApi.report({
       target_type: 'post',
-      target_id: post.value.id,
+      target_id: id,
       reason: `[${reportType.value}] ${reportReason.value.trim()}`,
     })
     toast('举报已提交，感谢你的反馈', 'success')
+    if (post.value?.id !== id) return
     reportType.value = ''
     reportReason.value = ''
     reporting.value = false
     menuOpen.value = false
-  } catch (e: any) {
-    toast(e?.response?.data?.message || '提交失败，请稍后重试', 'error')
-  }
+  })
 }
 </script>
 
@@ -180,18 +361,19 @@ async function submitReport() {
       <div class="content-area">
         <!-- 右上角「...」菜单：举报 -->
         <!-- @click.stop：菜单内部的点击不冒泡到 document，避免 onDocClick 误关（2026-08-08 修复） -->
-        <div ref="menuRef" class="post-menu" @click.stop>
-          <button class="more-btn" :class="{ active: menuOpen }" @click="toggleMenu">
+        <div ref="menuRef" class="post-menu" @click.stop @keydown.esc.stop="menuOpen = false; reporting = false">
+          <button type="button" class="more-btn" aria-label="更多文章操作" :aria-expanded="menuOpen" :class="{ active: menuOpen }" @click="toggleMenu">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="5" r="1.2" />
               <circle cx="12" cy="12" r="1.2" />
               <circle cx="12" cy="19" r="1.2" />
             </svg>
           </button>
+          <Transition name="anchored-menu">
           <div v-if="menuOpen" class="more-dropdown" :class="{ wide: reporting }">
             <template v-if="!reporting">
-              <div class="more-item" @click="sharePost">🔗 分享</div>
-              <div class="more-item" @click="openReport">🚩 举报</div>
+              <button type="button" class="more-item" @click="sharePost">🔗 分享</button>
+              <button type="button" class="more-item" @click="openReport">🚩 举报</button>
             </template>
             <template v-else>
               <div class="report-panel-title">举报类型</div>
@@ -210,15 +392,16 @@ async function submitReport() {
                 @click.stop
               />
               <div class="more-actions">
-                <button class="more-action-btn primary" @click="submitReport">提交举报</button>
+                <button class="more-action-btn primary" :disabled="busy.report" @click="submitReport">{{ busy.report ? '提交中…' : '提交举报' }}</button>
                 <button class="more-action-btn" @click="reporting = false">取消</button>
               </div>
             </template>
           </div>
+          </Transition>
         </div>
         <span class="tag tag-game">{{ post.game_name || post.game_id }}</span>
         <span class="tag tag-cat">{{ post.category }}</span>
-        <h1 class="title">{{ post.title }}</h1>
+        <h1 ref="articleTitle" data-article-title class="title">{{ post.title }}</h1>
         <!-- 作者信息区：头像 + 昵称（可点击进主页）+ 浏览/时间 + 关注按钮 -->
         <div class="author-bar">
           <router-link :to="`/user/${post.user_id}`" class="author-link">
@@ -227,56 +410,42 @@ async function submitReport() {
               <span v-else>{{ (post.username || 'U').charAt(0) }}</span>
             </div>
             <div class="author-info">
-              <div class="author-name">{{ post.username }}</div>
+              <div class="author-name">{{ post.nickname || post.username }}</div>
               <div class="meta">
                 <span>👁 {{ post.view_count }} 浏览</span>
-                <span>{{ post.created_at?.slice(0, 10) }}</span>
+                <span>{{ new Date(post.published_at || post.created_at || '').toLocaleDateString('zh-CN') }}</span>
               </div>
             </div>
           </router-link>
           <button
             v-if="post.user_id !== userStore.userInfo?.id"
-            class="follow-btn"
+            class="follow-btn" :disabled="busy.follow || !statusReady"
             :class="{ followed }"
             @click="toggleFollow"
           >
-            {{ followed ? '已关注' : '关注' }}
+            <FollowLabel :followed="followed" />
           </button>
         </div>
-        <PostBody :post="post" />
+        <PostBody :post="post" reading-tools />
 
-        <div class="comments-section">
-          <div v-if="!comments.length" class="comments-empty">暂无评论，来说两句吧</div>
-          <div v-for="c in comments" :key="c.id" class="comment-item">
-            <router-link v-if="c.user_id" :to="`/user/${c.user_id}`" class="comment-avatar">
-              <img
-                v-if="c.avatar && !commentAvatarFailed.has(c.id)"
-                :src="c.avatar"
-                alt="评论者头像"
-                @error="commentAvatarFailed = new Set(commentAvatarFailed).add(c.id)"
-              />
-              <span v-else>{{ (c.nickname || c.username || '?').charAt(0) }}</span>
-            </router-link>
-            <div v-else class="comment-avatar">
-              <img
-                v-if="c.avatar && !commentAvatarFailed.has(c.id)"
-                :src="c.avatar"
-                alt="评论者头像"
-                @error="commentAvatarFailed = new Set(commentAvatarFailed).add(c.id)"
-              />
-              <span v-else>{{ (c.nickname || c.username || '?').charAt(0) }}</span>
-            </div>
-            <div class="comment-body">
-              <div class="comment-meta">
-                <router-link v-if="c.user_id" :to="`/user/${c.user_id}`" class="comment-name">{{
-                  c.nickname || c.username
-                }}</router-link>
-                <span v-else class="comment-name">{{ c.nickname || c.username }}</span>
-                <span class="comment-time">{{ c.created_at?.slice(0, 10) }}</span>
-              </div>
-              <div class="comment-content">{{ c.content }}</div>
-            </div>
-          </div>
+        <p v-if="statusError"><button :disabled="statusLoading" @click="loadStatus(post.id, detailSequence)">互动状态加载失败，点击重试</button></p>
+        <div class="comments-section" :aria-busy="commentsLoading">
+          <p v-if="commentsLoading">评论加载中…</p>
+          <p v-if="commentsError">{{ commentsError }} <button @click="loadComments()">重试</button></p>
+          <div v-if="!commentsLoading && !commentsError && !comments.length" class="comments-empty">暂无评论，来说两句吧</div>
+          <TransitionGroup tag="div" class="comment-list" :css="false" @enter="(el, done) => animateComment(el, done, animateComments)" @leave="(el, done) => animateComment(el, done, animateComments, true)">
+          <CommentItem
+            v-for="c in comments"
+            :key="c.id"
+            :comment="c"
+            :current-user-id="userStore.userInfo?.id"
+            :is-admin="userStore.role === 'admin'"
+            :animate-changes="animateComments"
+            @reply="replyToComment"
+            @delete="deleteComment"
+          />
+          </TransitionGroup>
+          <AppPagination :page="commentPage" :page-count="commentPageCount" @change="changeCommentPage" />
         </div>
       </div>
     </div>
@@ -284,21 +453,22 @@ async function submitReport() {
     <!-- 底部操作栏 -->
     <div class="bottombar">
       <div class="comment-input-wrap">
-        <input v-model="commentText" placeholder="说点什么..." @keyup.enter="submitComment" />
-        <span class="send-btn" @click="submitComment">发送</span>
+        <input v-model="commentText" maxlength="2000" :disabled="busy.comment" placeholder="说点什么..." @keyup.enter="submitComment" />
+        <button class="send-btn" :disabled="busy.comment" @click="submitComment">发送</button>
       </div>
       <div class="actions">
-        <div class="action-item" :class="{ active: liked }" @click="toggleLike">
-          <span style="font-size: 1.3rem">{{ liked ? '❤️' : '🤍' }}</span>
-          <span class="action-num">{{ post.like_count }}</span>
-        </div>
-        <div class="action-item" :class="{ active: favorited }" @click="toggleFav">
-          <span style="font-size: 1.3rem">{{ favorited ? '⭐' : '☆' }}</span>
-        </div>
-        <div class="action-item">
-          <span style="font-size: 1.3rem">💬</span>
-          <span class="action-num">{{ post.comment_count }}</span>
-        </div>
+        <button aria-label="点赞" :disabled="busy.like || !statusReady" class="action-item" :class="{ active: liked }" @click="toggleLike">
+          <svg ref="likeIcon" class="interaction-icon heart-icon" :class="{ selected: liked }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z" /></svg>
+          <MotionCount class="action-num" :value="post.like_count" />
+        </button>
+        <button aria-label="收藏" :disabled="busy.favorite || !statusReady" class="action-item" :class="{ active: favorited }" @click="toggleFav">
+          <svg ref="favoriteIcon" class="interaction-icon bookmark-icon" :class="{ selected: favorited }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4V3Z" /></svg>
+          <MotionCount class="action-num" :value="post.favorite_count || 0" />
+        </button>
+        <button aria-label="查看评论" class="action-item" @click="focusComments">
+          <svg class="interaction-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10Z" /></svg>
+          <MotionCount class="action-num" :value="post.comment_count" />
+        </button>
       </div>
     </div>
   </div>
@@ -317,6 +487,7 @@ async function submitReport() {
   >
     <div style="font-size: 3rem; opacity: 0.2">🗡️</div>
     <div>{{ loadError }}</div>
+    <button @click="loadDetail">重新加载</button>
     <button
       style="
         padding: 8px 24px;
@@ -334,6 +505,7 @@ async function submitReport() {
       返回首页
     </button>
   </div>
+  <div v-else role="status" style="padding: 60px; text-align: center">文章加载中…</div>
 </template>
 
 <style scoped>
@@ -421,6 +593,12 @@ async function submitReport() {
   min-width: 240px;
 }
 .more-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  font-family: inherit;
   padding: 9px 12px;
   border-radius: var(--radius-sm);
   font-size: 0.82rem;

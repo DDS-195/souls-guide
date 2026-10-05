@@ -13,7 +13,7 @@ import { toast } from '../utils/toast'
 defineOptions({ name: 'VideoUploader' })
 
 const { modelValue } = defineProps<{ modelValue: string | null }>()
-const emit = defineEmits<{ (e: 'update:modelValue', v: string | null): void }>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: string | null): void; (e: 'busy', v: boolean): void }>()
 
 const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB，与后端一致
 const MAX_SIZE = 500 * 1024 * 1024 // 500MB（≤100 片）
@@ -24,12 +24,25 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 const tip = ref('')
 const progress = ref(0)
+// 仅记录本次页面会话中新上传的临时资产；编辑已有视频时保持 null，避免误删已绑定资产。
+const assetId = ref<number | null>(null)
+
+async function setUploaded(url: string, nextAssetId: number | null) {
+  const previousAssetId = assetId.value
+  assetId.value = nextAssetId
+  emit('update:modelValue', url)
+  if (previousAssetId && previousAssetId !== nextAssetId) {
+    await mediaApi.removeAsset(previousAssetId).catch(() => {})
+  }
+}
 
 // 组件卸载标志：上传中离开写攻略页时，剩余分片不再继续上传、不发 emit/toast（原实现上传继续跑并 emit 到已卸载组件）。
 // 已上传的分片保留在服务端 tmp，下次进入时断点续传继续（status 接口查到已传分片）。
 let disposed = false
+let controller: AbortController | null = null
 onUnmounted(() => {
   disposed = true
+  controller?.abort()
 })
 
 /** 增量计算文件 MD5 hash（2MB 切片读，避免大文件占满内存） */
@@ -39,6 +52,7 @@ function computeHash(file: File): Promise<string> {
     const SLICE = 2 * 1024 * 1024
     let offset = 0
     const readNext = () => {
+      if (disposed || controller?.signal.aborted) { spark.destroy(); reject(new Error('cancelled')); return }
       const reader = new FileReader()
       reader.onload = (e) => {
         spark.append(e.target!.result as ArrayBuffer)
@@ -54,17 +68,21 @@ function computeHash(file: File): Promise<string> {
 }
 
 async function upload(file: File) {
+  if (uploading.value || disposed) return
+  const task = new AbortController()
+  controller = task
   uploading.value = true
+  emit('busy', true)
   progress.value = 0
   try {
     tip.value = '正在计算文件哈希…'
     const hash = await computeHash(file)
     if (disposed) return // 组件已卸载，不再继续
 
-    const { data: st } = await mediaApi.videoStatus(hash)
+    const { data: st } = await mediaApi.videoStatus(hash, task.signal)
     if (st.url) {
       if (disposed) return
-      emit('update:modelValue', st.url)
+      await setUploaded(st.url, st.asset_id)
       toast('视频已上传', 'success')
       return
     }
@@ -76,30 +94,42 @@ async function upload(file: File) {
     tip.value = `共 ${total} 片，续传 ${done.size} 片，3 片并发上传中…`
     let finished = done.size
     let next = 0
+    let failure: unknown
     const worker = async () => {
+      try {
       while (next < queue.length) {
-        if (disposed) throw new Error('cancelled') // 卸载中断并发 worker
+        if (disposed || task.signal.aborted) return
         const i = queue[next++]
         const chunk = file.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, file.size))
-        await mediaApi.videoChunk(hash, i, total, chunk, file.name)
+        await mediaApi.videoChunk(hash, i, total, chunk, file.name, task.signal)
+        if (disposed || task.signal.aborted) return
         finished++
         progress.value = Math.round((finished / total) * 100)
       }
+      } catch (err) {
+        if (!task.signal.aborted) failure = err
+        task.abort()
+      }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker))
+    if (failure) throw failure
+    if (task.signal.aborted) return
     if (disposed) return
 
     // 合并 + 转码阶段无进度反馈，明确提示避免误以为卡死（非 mp4 格式需 FFmpeg 转码，大文件可能数分钟）
     tip.value = '分片上传完成，正在合并与转码（请耐心等待，勿关闭页面）…'
-    const { data: merge } = await mediaApi.videoMerge(hash, total, file.name)
+    const { data: merge } = await mediaApi.videoMerge(hash, total, file.name, task.signal)
     if (disposed) return
-    emit('update:modelValue', merge.url)
+    await setUploaded(merge.url, merge.asset_id)
     toast('视频上传完成', 'success')
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (disposed) return // 卸载中断：不提示（页面已离开）
-    toast('视频上传失败：' + (err?.message === 'cancelled' ? '已取消' : err?.message || '网络错误'), 'error')
+    const message = err instanceof Error ? err.message : ''
+    toast('视频上传失败：' + (message === 'cancelled' ? '已取消' : message || '网络错误'), 'error')
   } finally {
     uploading.value = false
+    controller = null
+    if (!disposed) emit('busy', false)
   }
 }
 
@@ -108,6 +138,7 @@ function onPick(e: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
+  if (!file.size) return toast('不能上传空视频文件', 'error')
   // 云盘占位文件防御（契约 4.1 备忘 5）：仅当 type 非空且非 video/* 时拦截；
   // type 为空但扩展名合法 → 放行（后端扩展名白名单兜底，勿误伤本地未关联 MIME 的合法文件）
   if (file.type && !file.type.startsWith('video/')) {
@@ -118,8 +149,18 @@ function onPick(e: Event) {
   upload(file)
 }
 
-function remove() {
+async function remove() {
+  const temporaryAssetId = assetId.value
+  assetId.value = null
   emit('update:modelValue', null)
+  if (temporaryAssetId) {
+    try {
+      await mediaApi.removeAsset(temporaryAssetId)
+    } catch {
+      // 失败时后端仍会按临时资产过期时间回收，不阻断用户继续编辑。
+      toast('视频已从文章移除，临时文件将在稍后自动清理', 'info')
+    }
+  }
 }
 </script>
 

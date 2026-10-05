@@ -6,6 +6,10 @@ module.exports = async function adminSuite() {
   const { test, http, mkUser, mkPost, makeToken, adminToken, pool, created, trackFile, expectFile, SEQ } = H
   let adminTok = ''
   await adminToken().then(t => adminTok = t)
+  const removeUser = async id => {
+    const preview = await http('GET', `/admin/users/${id}/deletion-preview`, { token: adminTok })
+    return http('DELETE', `/admin/users/${id}`, { token: adminTok, body: { username: preview.data.data?.username || '', fingerprint: preview.data.data?.fingerprint || '', reason: '测试删除' } })
+  }
   const authorId = await mkUser('adauthor', { role: 'creator', apply: 'approved' })
   const authorTok = makeToken(authorId, 'adauthor', 'creator')
 
@@ -16,17 +20,17 @@ module.exports = async function adminSuite() {
     H.assert.ok('total' in r.data.data && 'list' in r.data.data)
   })
   await test('approve 不存在 → 404（P0-4 修复：原 200）', async () => {
-    const r = await http('PUT', '/admin/posts/99999999/approve', { token: adminTok })
+    const r = await http('PUT', '/admin/posts/99999999/approve', { token: adminTok, body: { content_version: 1 } })
     H.assert.equal(r.status, 404)
   })
-  await test('approve draft → 400 禁绕过直发（P0-4 修复）', async () => {
+  await test('approve draft → 409 禁绕过直发（P0-4 修复）', async () => {
     const pid = await mkPost(authorId, { status: 'draft' })
-    const r = await http('PUT', `/admin/posts/${pid}/approve`, { token: adminTok })
-    H.assert.equal(r.status, 400)
+    const r = await http('PUT', `/admin/posts/${pid}/approve`, { token: adminTok, body: { content_version: 1 } })
+    H.assert.equal(r.status, 409)
   })
   await test('approve pending → published + 作者收审核通知', async () => {
     const pid = await mkPost(authorId, { status: 'pending' })
-    const r = await http('PUT', `/admin/posts/${pid}/approve`, { token: adminTok })
+    const r = await http('PUT', `/admin/posts/${pid}/approve`, { token: adminTok, body: { content_version: 1 } })
     H.assert.equal(r.status, 200)
     const [[p]] = await pool.execute('SELECT status FROM posts WHERE id=?', [pid])
     H.assert.equal(p.status, 'published')
@@ -35,7 +39,7 @@ module.exports = async function adminSuite() {
   })
   await test('reject pending → rejected + 原因落库', async () => {
     const pid = await mkPost(authorId, { status: 'pending' })
-    const r = await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { reason: '内容太水' } })
+    const r = await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { content_version: 1, reason: '内容太水' } })
     H.assert.equal(r.status, 200)
     const [[p]] = await pool.execute('SELECT status, reject_reason FROM posts WHERE id=?', [pid])
     H.assert.equal(p.status, 'rejected')
@@ -43,28 +47,28 @@ module.exports = async function adminSuite() {
   })
   await test('reject 空原因 → 400；超 200 字 → 400（P1-1 修复）', async () => {
     const pid = await mkPost(authorId, { status: 'pending' })
-    H.assert.equal((await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { reason: '' } })).status, 400)
-    H.assert.equal((await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { reason: 'x'.repeat(201) } })).status, 400)
+    H.assert.equal((await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { content_version: 1, reason: '' } })).status, 400)
+    H.assert.equal((await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { content_version: 1, reason: 'x'.repeat(201) } })).status, 400)
   })
-  await test('reject published → 400 禁打回（P0-4 修复）', async () => {
+  await test('reject published → 409 禁打回（P0-4 修复）', async () => {
     const pid = await mkPost(authorId, { status: 'published' })
-    H.assert.equal((await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { reason: 'x' } })).status, 400)
+    H.assert.equal((await http('PUT', `/admin/posts/${pid}/reject`, { token: adminTok, body: { content_version: 1, reason: 'x' } })).status, 409)
   })
 
   // ---- 创作者申请审批（P0-1）----
   await test('GET /admin/applications → 200 且不泄漏 password（坑2 回归）', async () => {
     const applier = await mkUser('adapplier')
-    await pool.execute("UPDATE users SET apply_status='pending' WHERE id=?", [applier])
+    await http('POST', '/users/apply-creator', { token: makeToken(applier, 'adapplier', 'user'), body: { reason: '申请创作' } })
     const r = await http('GET', '/admin/applications', { token: adminTok })
     H.assert.equal(r.status, 200)
-    const hit = r.data.data.list.find(u => u.id === applier)
+    const hit = r.data.data.list.find(u => u.user_id === applier)
     H.assert.ok(hit, '申请应出现在列表')
     H.assert.ok(!('password' in hit), '严禁泄漏密码哈希')
   })
   await test('approve 申请 → role=creator + 申请人收通知', async () => {
     const applier = await mkUser('adapplier2')
-    await pool.execute("UPDATE users SET apply_status='pending' WHERE id=?", [applier])
-    const r = await http('PUT', `/admin/applications/${applier}/approve`, { token: adminTok })
+    const application = await http('POST', '/users/apply-creator', { token: makeToken(applier, 'adapplier2', 'user'), body: { reason: '申请创作' } })
+    const r = await http('PUT', `/admin/applications/${applier}/approve`, { token: adminTok, body: { application_id: application.data.data.id } })
     H.assert.equal(r.status, 200)
     const [[u]] = await pool.execute('SELECT role, apply_status FROM users WHERE id=?', [applier])
     H.assert.equal(u.role, 'creator')
@@ -73,7 +77,7 @@ module.exports = async function adminSuite() {
     H.assert.ok(n.data.data.list.some(x => x.type === 'audit' && x.target_type === 'creatorship'))
   })
   await test('approve 不存在 → 404（P0-1 修复：原 500）', async () => {
-    H.assert.equal((await http('PUT', '/admin/applications/99999999/approve', { token: adminTok })).status, 404)
+    H.assert.equal((await http('PUT', '/admin/applications/99999999/approve', { token: adminTok, body: { application_id: 99999999 } })).status, 404)
   })
   await test('approve 未申请 → 400；admin 目标 → 400 防降级（P0-1 修复）', async () => {
     const plain = await mkUser('adplain')
@@ -86,11 +90,12 @@ module.exports = async function adminSuite() {
   })
   await test('reject 申请 → apply_status=rejected；已驳回再 reject → 400', async () => {
     const applier = await mkUser('adapplier3')
-    await pool.execute("UPDATE users SET apply_status='pending' WHERE id=?", [applier])
-    H.assert.equal((await http('PUT', `/admin/applications/${applier}/reject`, { token: adminTok })).status, 200)
+    const application = await http('POST', '/users/apply-creator', { token: makeToken(applier, 'adapplier3', 'user'), body: { reason: '申请创作' } })
+    const body = { application_id: application.data.data.id, reason: '请补充内容方向' }
+    H.assert.equal((await http('PUT', `/admin/applications/${applier}/reject`, { token: adminTok, body })).status, 200)
     const [[u]] = await pool.execute('SELECT apply_status FROM users WHERE id=?', [applier])
     H.assert.equal(u.apply_status, 'rejected')
-    H.assert.equal((await http('PUT', `/admin/applications/${applier}/reject`, { token: adminTok })).status, 400)
+    H.assert.equal((await http('PUT', `/admin/applications/${applier}/reject`, { token: adminTok, body })).status, 409)
   })
 
   // ---- 用户管理 ----
@@ -105,44 +110,50 @@ module.exports = async function adminSuite() {
   await test('封禁 → status=0 且 token 立即失效；解封恢复', async () => {
     const victim = await mkUser('advictim')
     const vTok = makeToken(victim, 'advictim', 'user')
-    const ban = await http('PUT', `/admin/users/${victim}/ban`, { token: adminTok })
+    const ban = await http('PUT', `/admin/users/${victim}/ban`, { token: adminTok, body: { status: 0, version: 1, reason: '测试封禁' } })
     H.assert.equal(ban.status, 200)
     const [[u]] = await pool.execute('SELECT status FROM users WHERE id=?', [victim])
     H.assert.equal(u.status, 0)
     H.assert.equal((await http('GET', '/users/me', { token: vTok })).status, 403, '封禁后 token 应 403')
-    H.assert.equal((await http('PUT', `/admin/users/${victim}/ban`, { token: adminTok })).status, 200)
-    H.assert.equal((await http('GET', '/users/me', { token: vTok })).status, 200, '解封后恢复')
+    H.assert.equal((await http('PUT', `/admin/users/${victim}/ban`, { token: adminTok, body: { status: 1, version: 2, reason: '测试解封' } })).status, 200)
+    H.assert.equal((await http('GET', '/users/me', { token: vTok })).status, 401, '解封后旧token仍作废')
   })
   await test('ban admin → 400 防锁死', async () => {
     const [[adminRow]] = await pool.execute("SELECT id FROM users WHERE username='admin'")
-    const r = await http('PUT', `/admin/users/${adminRow.id}/ban`, { token: adminTok })
+    const r = await http('PUT', `/admin/users/${adminRow.id}/ban`, { token: adminTok, body: { status: 0, version: 1, reason: '测试保护' } })
     H.assert.equal(r.status, 400)
   })
   await test('删除用户：不存在 404 / admin 400 / 自己 400 / 公告作者 400', async () => {
-    H.assert.equal((await http('DELETE', '/admin/users/99999999', { token: adminTok })).status, 404)
+    H.assert.equal((await removeUser(99999999)).status, 404)
     const [[adminRow]] = await pool.execute("SELECT id, username FROM users WHERE username='admin'")
     H.assert.equal((await http('DELETE', `/admin/users/${adminRow.id}`, { token: adminTok })).status, 400)
     H.assert.equal((await http('DELETE', `/admin/users/${adminRow.id}`, { token: adminTok })).status, 400)
     const annAuthor = await mkUser('adannauthor')
     await pool.execute('INSERT INTO announcements (title, content, author_id, status) VALUES (?,?,?,?)', ['测试公告', '内容', annAuthor, 'draft'])
-    const r = await http('DELETE', `/admin/users/${annAuthor}`, { token: adminTok })
+    const r = await removeUser(annAuthor)
     H.assert.equal(r.status, 400)
     H.assert.equal(r.data.message, '该用户发布过公告，不能删除')
     await pool.execute('DELETE FROM announcements WHERE author_id=?', [annAuthor])
   })
   await test('删除用户级联清空 + 磁盘文件清理（P2-5 修复）', async () => {
-    const victim = await mkUser('addeluser')
-    const vTok = makeToken(victim, 'addeluser', 'user')
+    const victim = await mkUser('addeluser', { role: 'creator', apply: 'approved' })
+    const vTok = makeToken(victim, 'addeluser', 'creator')
     // 头像 + 文章（内嵌图 + 封面）
     const up = await http('POST', '/users/me/avatar', { token: vTok, form: H.pngForm('del-avatar.png') })
     H.assert.equal(up.status, 200)
     const avatarUrl = trackFile(up.data.data.url)
-    const upImg = await http('POST', '/media/upload/image', { token: authorTok, form: H.pngForm('del-img.png') })
+    const upImg = await http('POST', '/media/upload/image', { token: vTok, form: H.pngForm('del-img.png') })
+    H.assert.equal(upImg.status, 200)
     const imgUrl = trackFile(upImg.data.data.url)
     expectFile(avatarUrl, true); expectFile(imgUrl, true)
-    const pid = await mkPost(victim, { status: 'published', cover: imgUrl, content: `<p><img src="${imgUrl}" alt="i"></p>` })
-    await pool.execute('INSERT INTO media (post_id, url, type, sort_order) VALUES (?,?,?,?)', [pid, imgUrl, 'image', 1])
-    const r = await http('DELETE', `/admin/users/${victim}`, { token: adminTok })
+    const post = await http('POST', '/posts', {
+      token: vTok,
+      body: { title: `待删用户文章_${SEQ}`, content: `<p><img src="${imgUrl}" alt="i"></p>`, cover: imgUrl, game_id: 1, category: 'BOSS攻略' },
+    })
+    H.assert.equal(post.status, 200)
+    const pid = post.data.data.id
+    created.posts.push(pid)
+    const r = await removeUser(victim)
     H.assert.equal(r.status, 200)
     H.assert.ok(r.data.data.post_count >= 1)
     const [[u]] = await pool.execute('SELECT COUNT(*) c FROM users WHERE id=?', [victim])
@@ -151,9 +162,27 @@ module.exports = async function adminSuite() {
     H.assert.equal(p.c, 0)
     const [[m]] = await pool.execute('SELECT COUNT(*) c FROM media WHERE post_id=?', [pid])
     H.assert.equal(m.c, 0)
+    await require('../src/services/cleanupService').cleanupUserAssets()
     expectFile(avatarUrl, false)
     expectFile(imgUrl, false)
     H.assert.equal((await http('GET', '/users/me', { token: vTok })).status, 401, '删除后旧 token 应失效')
+  })
+  await test('删除用户后其他文章的 like_count/comment_count 按真实行数重算', async () => {
+    const victim = await mkUser('adcountervictim')
+    const owner = await mkUser('adcounterowner', { role: 'creator', apply: 'approved' })
+    const targetPost = await mkPost(owner, { status: 'published' })
+    await pool.execute('INSERT INTO likes (user_id, post_id) VALUES (?, ?)', [victim, targetPost])
+    await pool.execute('INSERT INTO comments (user_id, post_id, content) VALUES (?, ?, ?)', [victim, targetPost, '待级联评论'])
+    await pool.execute('UPDATE posts SET like_count=1, comment_count=1 WHERE id=?', [targetPost])
+    const removed = await removeUser(victim)
+    H.assert.equal(removed.status, 200)
+    const [[post]] = await pool.execute('SELECT like_count, comment_count FROM posts WHERE id=?', [targetPost])
+    const [[likes]] = await pool.execute('SELECT COUNT(*) c FROM likes WHERE post_id=?', [targetPost])
+    const [[comments]] = await pool.execute('SELECT COUNT(*) c FROM comments WHERE post_id=?', [targetPost])
+    H.assert.equal(post.like_count, likes.c)
+    H.assert.equal(post.comment_count, comments.c)
+    H.assert.equal(post.like_count, 0)
+    H.assert.equal(post.comment_count, 1, '删除账号保留一个评论占位节点')
   })
 
   // ---- 公告 ----
@@ -163,11 +192,21 @@ module.exports = async function adminSuite() {
     H.assert.equal(c.status, 200)
     annId = c.data.data.id
     created.announcements.push(annId)
-    H.assert.equal((await http('PUT', `/admin/announcements/${annId}`, { token: adminTok, body: { title: `公告改_${SEQ}`, content: '更新' } })).status, 200)
+    const updated = await http('PUT', `/admin/announcements/${annId}`, {
+      token: adminTok, body: { title: `公告改_${SEQ}`, content: '更新', version: 1 },
+    })
+    H.assert.equal(updated.status, 200)
+    H.assert.equal(updated.data.data.version, 2)
     H.assert.equal((await http('PUT', `/admin/announcements/${annId}/publish`, { token: adminTok })).status, 200)
     const latest = await http('GET', '/announcements/latest')
     H.assert.equal(latest.data.data.id, annId)
     H.assert.equal(latest.data.data.status, 'published')
+    H.assert.ok(latest.data.data.published_at)
+    H.assert.equal((await http('POST', `/announcements/${annId}/read`, { body: { version: 2 } })).status, 401)
+    H.assert.equal((await http('POST', `/announcements/${annId}/read`, { token: authorTok })).status, 404)
+    H.assert.equal((await http('POST', `/announcements/${annId}/read`, { token: authorTok, body: { version: 2 } })).status, 200)
+    const readLatest = await http('GET', '/announcements/latest', { token: authorTok })
+    H.assert.equal(readLatest.data.data.is_read, 1)
     H.assert.equal((await http('PUT', `/admin/announcements/${annId}/archive`, { token: adminTok })).status, 200)
     H.assert.equal((await http('GET', '/announcements/latest')).data.data, null, '归档后无 published 公告')
   })
@@ -182,14 +221,61 @@ module.exports = async function adminSuite() {
     H.assert.equal(r1.status, 'archived')
     H.assert.equal(r2.status, 'published')
   })
-  await test('公告缺字段/超长 → 400（P1-1 修复）', async () => {
+  await test('公告输入严格校验：缺字段/空白/错误类型/超长 → 400', async () => {
+    H.assert.equal((await http('POST', '/admin/announcements', { token: adminTok })).status, 400)
     H.assert.equal((await http('POST', '/admin/announcements', { token: adminTok, body: { title: 'x' } })).status, 400)
+    H.assert.equal((await http('POST', '/admin/announcements', { token: adminTok, body: { title: '  ', content: '\n' } })).status, 400)
+    H.assert.equal((await http('POST', '/admin/announcements', { token: adminTok, body: { title: {}, content: [] } })).status, 400)
     H.assert.equal((await http('POST', '/admin/announcements', { token: adminTok, body: { title: 'x'.repeat(201), content: 'x' } })).status, 400)
     H.assert.equal((await http('POST', '/admin/announcements', { token: adminTok, body: { title: 'x', content: '长'.repeat(22000) } })).status, 400)
   })
-  await test('删除公告 → 200', async () => {
+  await test('不存在公告返回 404，错误版本和非法状态迁移返回 409', async () => {
+    H.assert.equal((await http('PUT', '/admin/announcements/99999999', { token: adminTok, body: { title: 'x', content: 'x', version: 1 } })).status, 404)
+    H.assert.equal((await http('PUT', '/admin/announcements/99999999/archive', { token: adminTok })).status, 404)
+    H.assert.equal((await http('DELETE', '/admin/announcements/99999999', { token: adminTok })).status, 404)
+    const draft = await http('POST', '/admin/announcements', { token: adminTok, body: { title: '版本冲突', content: 'x' } })
+    created.announcements.push(draft.data.data.id)
+    H.assert.equal((await http('PUT', `/admin/announcements/${draft.data.data.id}`, { token: adminTok, body: { title: 'x', content: 'x', version: 99 } })).status, 409)
+    H.assert.equal((await http('PUT', `/admin/announcements/${draft.data.data.id}/archive`, { token: adminTok })).status, 409)
+  })
+  await test('发布版本冻结；修订通过复制生成新草稿', async () => {
+    const source = await http('POST', '/admin/announcements', { token: adminTok, body: { title: '冻结版本', content: '原文' } })
+    const sourceId = source.data.data.id
+    created.announcements.push(sourceId)
+    H.assert.equal((await http('PUT', `/admin/announcements/${sourceId}/publish`, { token: adminTok })).status, 200)
+    H.assert.equal((await http('PUT', `/admin/announcements/${sourceId}`, { token: adminTok, body: { title: '篡改', content: '篡改', version: 1 } })).status, 409)
+    H.assert.equal((await http('DELETE', `/admin/announcements/${sourceId}`, { token: adminTok })).status, 409)
+    const cloned = await http('POST', `/admin/announcements/${sourceId}/clone`, { token: adminTok })
+    H.assert.equal(cloned.status, 200)
+    created.announcements.push(cloned.data.data.id)
+    const [[copy]] = await pool.execute('SELECT status,source_id,title,content FROM announcements WHERE id=?', [cloned.data.data.id])
+    H.assert.equal(copy.status, 'draft')
+    H.assert.equal(copy.source_id, sourceId)
+    H.assert.equal(copy.content, '原文')
+  })
+  await test('并发发布经固定发布槽串行化，最终只有一条生效', async () => {
+    const first = await http('POST', '/admin/announcements', { token: adminTok, body: { title: '并发A', content: 'A' } })
+    const second = await http('POST', '/admin/announcements', { token: adminTok, body: { title: '并发B', content: 'B' } })
+    created.announcements.push(first.data.data.id, second.data.data.id)
+    const results = await Promise.all([
+      http('PUT', `/admin/announcements/${first.data.data.id}/publish`, { token: adminTok }),
+      http('PUT', `/admin/announcements/${second.data.data.id}/publish`, { token: adminTok }),
+    ])
+    H.assert.ok(results.every((result) => result.status === 200))
+    const [[count]] = await pool.execute("SELECT COUNT(*) c FROM announcements WHERE status='published'")
+    const [[channel]] = await pool.execute("SELECT current_announcement_id FROM announcement_channels WHERE channel='global'")
+    H.assert.equal(count.c, 1)
+    H.assert.ok([first.data.data.id, second.data.data.id].includes(channel.current_announcement_id))
+  })
+  await test('删除草稿 → 软删除并保留事务审计快照', async () => {
     const a = await http('POST', '/admin/announcements', { token: adminTok, body: { title: 'AD', content: 'x' } })
+    created.announcements.push(a.data.data.id)
     H.assert.equal((await http('DELETE', `/admin/announcements/${a.data.data.id}`, { token: adminTok })).status, 200)
+    const [[deleted]] = await pool.execute('SELECT status,deleted_at FROM announcements WHERE id=?', [a.data.data.id])
+    const [[events]] = await pool.execute('SELECT COUNT(*) c FROM announcement_events WHERE announcement_id=? AND action IN (?,?)', [a.data.data.id, 'create', 'delete'])
+    H.assert.equal(deleted.status, 'deleted')
+    H.assert.ok(deleted.deleted_at)
+    H.assert.equal(events.c, 2)
   })
 
   // ---- 统计 / 系统通知 / 举报处理 ----
@@ -199,7 +285,7 @@ module.exports = async function adminSuite() {
     H.assert.ok('totalUsers' in r.data.data && 'totalPosts' in r.data.data && 'totalViews' in r.data.data)
   })
   await test('系统通知全员 → 200 count>0 且落库 type=system', async () => {
-    const r = await http('POST', '/admin/notifications', { token: adminTok, body: { content: `系统公告_${SEQ}` } })
+    const r = await http('POST', '/admin/notifications', { token: adminTok, body: { scope: 'all', request_id: require('crypto').randomUUID(), content: `系统公告_${SEQ}` } })
     H.assert.equal(r.status, 200)
     H.assert.ok(r.data.data.count >= 1)
     const [[n]] = await pool.execute('SELECT COUNT(*) c FROM notifications WHERE content=? AND type=? AND sender_id IS NULL', [`系统公告_${SEQ}`, 'system'])
@@ -208,11 +294,11 @@ module.exports = async function adminSuite() {
     await pool.execute('DELETE FROM notifications WHERE content=?', [`系统公告_${SEQ}`])
   })
   await test('定向通知不存在用户 → 404（P1-3 修复：原 500）', async () => {
-    const r = await http('POST', '/admin/notifications', { token: adminTok, body: { content: 'x', target_user_id: 99999999 } })
+    const r = await http('POST', '/admin/notifications', { token: adminTok, body: { scope: 'user', request_id: require('crypto').randomUUID(), content: 'x', target_user_id: 99999999 } })
     H.assert.equal(r.status, 404)
   })
   await test('通知超 300 字 → 400（P1-1 修复）', async () => {
-    H.assert.equal((await http('POST', '/admin/notifications', { token: adminTok, body: { content: 'x'.repeat(301) } })).status, 400)
+    H.assert.equal((await http('POST', '/admin/notifications', { token: adminTok, body: { scope: 'all', request_id: require('crypto').randomUUID(), content: 'x'.repeat(301) } })).status, 400)
   })
   await test('举报列表 + resolve 处理（白名单/备注长度）', async () => {
     const pub = await mkPost(authorId, { status: 'published' })
@@ -231,7 +317,7 @@ module.exports = async function adminSuite() {
   // ---- 操作日志审计（D23 回归 + P0-1 审批记录）----
   await test('GET /admin/logs → 200 分页筛选 + ban_user 审计落库', async () => {
     const victim = await mkUser('adloguser')
-    await http('PUT', `/admin/users/${victim}/ban`, { token: adminTok })
+    await http('PUT', `/admin/users/${victim}/ban`, { token: adminTok, body: { status: 0, version: 1, reason: '日志测试' } })
     const r = await http('GET', '/admin/logs?action=ban_user', { token: adminTok })
     H.assert.equal(r.status, 200)
     const hit = r.data.data.list.find(x => x.target_id === victim)

@@ -1,314 +1,397 @@
 <script setup lang="ts">
-// 内容审核页（/admin/pending，auth+admin）
-// 数据源：GET /admin/posts/pending（分页，返回 posts.* + username，含正文 content）
-// 待审文章详情页不公开（详情仅 published 开放），管理员在列表内直接预览正文后 通过/驳回
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, inject } from 'vue'
+import { pageBackKey } from '../../composables/pageBack'
+import { isAxiosError } from 'axios'
 import { adminApi } from '../../api'
 import { toast } from '../../utils/toast'
+import { errorMessage } from '../../utils/errors'
 import AppPagination from '../../components/AppPagination.vue'
 import AppEmpty from '../../components/AppEmpty.vue'
 import AppModal from '../../components/AppModal.vue'
+import PostBody from '../../components/PostBody.vue'
 import { usePagination } from '../../composables/usePagination'
+import type { Post, ReviewPost } from '../../types/api'
 
-const list = ref<any[]>([])
+const list = ref<Post[]>([])
+const pageBack = inject(pageBackKey)
+function handlePageBack() {
+  if (busy.value) return true
+  if (rejectOpen.value) {
+    closeReject()
+    return true
+  }
+  if (selectedId.value !== null) {
+    back()
+    return true
+  }
+  return false
+}
 const loading = ref(true)
 const error = ref('')
-const expanded = ref<Set<number>>(new Set())
 const { page, total, pageCount, pageSize, go } = usePagination(10)
-
-// 驳回弹窗
-const rejectTarget = ref<any>(null)
+const selectedId = ref<number | null>(null)
+const detail = ref<ReviewPost | null>(null)
+const detailLoading = ref(false)
+const detailError = ref('')
+const decisionError = ref('')
+const stale = ref(false)
+const busy = ref(false)
+const rejectOpen = ref(false)
 const rejectReason = ref('')
+let listSeq = 0
+let detailSeq = 0
 
 async function load() {
+  const seq = ++listSeq
   loading.value = true
   error.value = ''
   try {
-    const r: any = await adminApi.getPendingPosts({ page: page.value, pageSize })
-    list.value = r.data.list || []
-    total.value = r.data.total || 0
-  } catch (e: any) {
-    error.value = e?.response?.data?.message || '加载失败，请重试'
+    const r = await adminApi.getPendingPosts({ page: page.value, pageSize })
+    if (seq !== listSeq) return
+    list.value = r.data.list
+    total.value = r.data.total
+    const last = Math.max(1, Math.ceil(total.value / pageSize))
+    if (page.value > last) {
+      page.value = last
+      await load()
+    }
+  } catch (e) {
+    if (seq === listSeq) error.value = errorMessage(e, '加载失败，请重试')
   } finally {
-    loading.value = false
+    if (seq === listSeq) loading.value = false
   }
 }
-
-onMounted(load)
-
+async function openReview(id: number) {
+  if (busy.value) return
+  selectedId.value = id
+  detail.value = null
+  detailError.value = ''
+  decisionError.value = ''
+  stale.value = false
+  rejectOpen.value = false
+  detailLoading.value = true
+  const seq = ++detailSeq
+  try {
+    const r = await adminApi.getReviewDetail(id)
+    if (seq === detailSeq) detail.value = r.data
+  } catch (e) {
+    if (seq === detailSeq) detailError.value = errorMessage(e, '审阅详情加载失败')
+  } finally {
+    if (seq === detailSeq) detailLoading.value = false
+  }
+}
+function back() {
+  if (busy.value) return
+  detailSeq++
+  selectedId.value = null
+  detail.value = null
+  rejectOpen.value = false
+  void load()
+}
 function goPage(p: number) {
-  if (go(p)) load()
+  if (go(p)) void load()
 }
-
-/** 通过：成功 toast 后从列表移除；当前页清空则回退一页 */
-async function approve(p: any) {
-  try {
-    await adminApi.approvePost(p.id)
-    toast(`已通过《${p.title}》，作者将收到站内通知`, 'success')
-    removeAndBack(p.id)
-  } catch (e: any) {
-    toast(e?.response?.data?.message || '操作失败，请重试', 'error')
-  }
-}
-
-function openReject(p: any) {
-  rejectTarget.value = p
+function openReject() {
+  if (busy.value || stale.value) return
   rejectReason.value = ''
+  rejectOpen.value = true
 }
-
-async function confirmReject() {
-  if (!rejectTarget.value) return
-  if (!rejectReason.value.trim()) return toast('请填写驳回原因', 'error')
+function closeReject() {
+  if (!busy.value) rejectOpen.value = false
+}
+async function decide(approve: boolean) {
+  const post = detail.value
+  if (!post || busy.value || stale.value || post.status !== 'pending') return
+  const reason = rejectReason.value.trim()
+  if (!approve && (!reason || reason.length > 200)) return toast('请填写 1 至 200 字驳回原因', 'error')
+  busy.value = true
+  decisionError.value = ''
   try {
-    const id = rejectTarget.value.id
-    const title = rejectTarget.value.title
-    await adminApi.rejectPost(id, rejectReason.value.trim())
-    rejectTarget.value = null
-    toast(`已驳回《${title}》`, 'success')
-    removeAndBack(id)
-  } catch (e: any) {
-    toast(e?.response?.data?.message || '操作失败，请重试', 'error')
+    if (approve) await adminApi.approvePost(post.id, post.content_version)
+    else await adminApi.rejectPost(post.id, reason, post.content_version)
+    toast(approve ? '已通过并发布，作者已收到通知' : '已驳回，作者已收到通知', 'success')
+    rejectOpen.value = false
+    selectedId.value = null
+    detail.value = null
+    await load()
+  } catch (e) {
+    decisionError.value = errorMessage(e, '审核失败，请重试')
+    if (isAxiosError(e) && [404, 409].includes(e.response?.status || 0)) {
+      stale.value = true
+      rejectOpen.value = false
+      void load()
+    }
+  } finally {
+    busy.value = false
   }
 }
-
-function removeAndBack(id: number) {
-  list.value = list.value.filter((p: any) => p.id !== id)
-  total.value = Math.max(0, total.value - 1)
-  if (!list.value.length && page.value > 1) {
-    page.value -= 1
-    load()
-  }
+function displayTime(value?: string | null) {
+  return value
+    ? value
+        .replace('T', ' ')
+        .replace(/\.\d+Z$/, '')
+        .slice(0, 19)
+    : '历史记录，提交时间未记录'
 }
-
-/** D22：content 为富文本 HTML → 纯文本预览（img 占位 + 去标签，textContent 天然无标签） */
-function htmlToText(s: string) {
-  const div = document.createElement('div')
-  div.innerHTML = s.replace(/<img[^>]*>/gi, '【图片】')
-  return (div.textContent || '').replace(/\s+/g, ' ').trim()
-}
-
-function previewOf(p: any) {
-  const text = htmlToText(p.content || '')
-  if (expanded.value.has(p.id)) return text
-  return text.length > 160 ? text.slice(0, 160) + '…' : text
-}
-
-function toggleExpand(p: any) {
-  const s = new Set(expanded.value)
-  if (s.has(p.id)) s.delete(p.id)
-  else s.add(p.id)
-  expanded.value = s
-}
+onMounted(() => {
+  if (pageBack) pageBack.value = handlePageBack
+  void load()
+})
+onBeforeUnmount(() => {
+  if (pageBack?.value === handlePageBack) pageBack.value = null
+  listSeq++
+  detailSeq++
+})
 </script>
 
 <template>
-  <div style="max-width: 900px; margin: 0 auto; padding: 20px 16px 40px; color: var(--text-primary)">
-    <!-- 头部 -->
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px">
-      <div style="display: flex; align-items: center; gap: 10px">
-        <h2 style="font-family: Cinzel, serif; color: var(--amber)">内容审核</h2>
-        <span v-if="!loading" class="badge">{{ total }} 篇待审</span>
+  <main class="review-page">
+    <header class="heading">
+      <div>
+        <h2>内容审核</h2>
+        <p v-if="selectedId === null">{{ total }} 篇待审 · 按提交时间排序</p>
       </div>
-      <button class="refresh-btn" @click="load">↻ 刷新</button>
-    </div>
+      <button v-if="selectedId === null" :disabled="loading" @click="load">刷新</button>
+    </header>
 
-    <!-- 加载/错误/空态（AppEmpty 统一三件套） -->
-    <AppEmpty :loading="loading" :error="error" empty-text="暂无待审核文章" icon="🗡️" @retry="load" />
-
-    <!-- 文章列表 -->
-    <template v-if="!loading && !error && list.length">
-      <div v-for="p in list" :key="p.id" class="post-card">
-        <div style="display: flex; align-items: flex-start; gap: 10px">
-          <span class="tag-pending">待审核</span>
-          <div style="flex: 1; min-width: 0">
-            <div class="post-title">{{ p.title }}</div>
-            <div class="post-meta">
-              <span>✍ {{ p.username }}</span>
-              <span>{{ p.game_name || '游戏 #' + p.game_id }}</span>
-              <span v-if="p.category">{{ p.category }}</span>
-              <span>🕐 {{ p.created_at?.slice(0, 10) }}</span>
-              <span>👁 {{ p.view_count }} · 👍 {{ p.like_count }} · 💬 {{ p.comment_count }}</span>
-            </div>
+    <template v-if="selectedId === null">
+      <AppEmpty
+        v-if="loading || error || !list.length"
+        :loading="loading"
+        :error="error"
+        empty-text="暂无待审核文章"
+        @retry="load"
+      />
+      <template v-else>
+        <article v-for="post in list" :key="post.id" class="queue-card">
+          <div class="queue-info">
+            <h3>{{ post.title }}</h3>
+            <p>{{ post.username }} · {{ post.game_name }} · {{ post.category }}<span v-if="post.is_revision"> · 修订审核</span></p>
+            <p>提交：{{ displayTime(post.submitted_at) }}</p>
           </div>
+          <button class="primary" @click="openReview(post.id)">审阅</button>
+        </article>
+        <AppPagination :page="page" :page-count="pageCount" @change="goPage" />
+      </template>
+    </template>
+    <template v-else>
+      <AppEmpty
+        v-if="detailLoading || detailError"
+        :loading="detailLoading"
+        :error="detailError"
+        @retry="openReview(selectedId!)"
+      />
+      <article v-else-if="detail" class="detail-card">
+        <header>
+          <h3 class="title">{{ detail.title }}</h3>
+          <p>{{ detail.username }} · {{ detail.game_name }} · {{ detail.category }}</p>
+          <p>提交：{{ displayTime(detail.submitted_at) }}</p>
+          <p v-if="detail.tags.length">标签：{{ detail.tags.join(' · ') }}</p>
+        </header>
+        <p v-if="detail.is_revision" class="notice">当前审阅的是修订版，原文章仍公开；通过后替换，驳回不影响原文章。</p>
+        <p v-if="detail.status !== 'pending'" class="notice">该文章已不在待审状态，请返回列表查看其他文章。</p>
+        <section v-if="detail.cover" class="cover-section" aria-label="文章封面">
+          <p>封面</p>
+          <img :src="detail.cover" alt="文章封面" class="cover" />
+        </section>
+        <PostBody :post="detail" />
+        <details v-if="detail.reviews.length" class="history">
+          <summary>最近审核记录（最多 20 条）</summary>
+          <article v-for="review in detail.reviews" :key="review.id">
+            <p>
+              {{ review.decision === 'published' ? '通过' : '驳回' }} · {{ review.reviewer_username }} ·
+              {{ displayTime(review.created_at) }}
+            </p>
+            <p v-if="review.reason">{{ review.reason }}</p>
+          </article>
+        </details>
+        <p v-if="decisionError" class="notice" role="alert">{{ decisionError }}</p>
+        <div v-if="stale" class="actions">
+          <button :disabled="busy" @click="openReview(selectedId!)">重新加载并审阅</button>
         </div>
-        <!-- 正文预览（pending 详情页不公开，管理员直接在此审阅） -->
-        <div class="post-preview">
-          <span v-if="!previewOf(p)" style="color: var(--text-muted)">（无正文内容）</span>
-          <template v-else>{{ previewOf(p) }}</template>
-          <span v-if="htmlToText(p.content || '').length > 160" class="expand-link" @click="toggleExpand(p)">
-            {{ expanded.has(p.id) ? '收起' : '展开全文' }}
-          </span>
-        </div>
-        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px">
-          <button class="action-btn danger" @click="openReject(p)">驳回</button>
-          <button class="action-btn primary" @click="approve(p)">✓ 通过并发布</button>
-        </div>
-      </div>
-
-      <!-- 分页（AppPagination 统一控件） -->
-      <AppPagination :page="page" :page-count="pageCount" @change="goPage" />
+        <footer v-else-if="detail.status === 'pending'" class="actions">
+          <button class="danger" :disabled="busy" @click="openReject">驳回</button>
+          <button class="primary" :disabled="busy" @click="decide(true)">{{ busy ? '处理中…' : '通过并发布' }}</button>
+        </footer>
+      </article>
     </template>
 
-    <!-- 驳回弹窗（AppModal 统一弹窗） -->
-    <AppModal v-if="rejectTarget" title="驳回文章" @close="rejectTarget = null">
-      <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px">
-        《{{ rejectTarget.title }}》<br />
-        <span style="font-size: 0.75rem; color: var(--text-muted)">驳回后作者将收到站内通知，需修改后重新提交审核</span>
-      </div>
+    <AppModal :open="Boolean(rejectOpen && detail)" title="驳回文章" @close="closeReject"><template v-if="rejectOpen && detail">
+      <p>《{{ detail.title }}》</p>
+      <p class="modal-hint">请说明需要修改的地方，作者会收到此原因。</p>
+      <label for="reject-reason">驳回原因</label>
       <textarea
+        id="reject-reason"
         v-model="rejectReason"
-        class="reason-input"
-        rows="3"
+        :disabled="busy"
         maxlength="200"
-        placeholder="请填写驳回原因（必填，≤200 字）"
-      ></textarea>
-      <div style="display: flex; gap: 8px; margin-top: 12px">
-        <button class="modal-btn" @click="rejectTarget = null">取消</button>
-        <button class="modal-btn primary" @click="confirmReject">确认驳回</button>
+        rows="4"
+        placeholder="例如：关键打法缺少说明，请补充操作步骤。"
+      />
+      <p class="modal-hint">{{ rejectReason.length }}/200</p>
+      <p v-if="decisionError" class="notice" role="alert">{{ decisionError }}</p>
+      <div class="actions">
+        <button :disabled="busy" @click="closeReject">取消</button>
+        <button class="danger" :disabled="busy || !rejectReason.trim()" @click="decide(false)">
+          {{ busy ? '处理中…' : '确认驳回' }}
+        </button>
       </div>
-    </AppModal>
-  </div>
+    </template></AppModal>
+  </main>
 </template>
 
 <style scoped>
-.badge {
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background: var(--amber-glow);
-  color: var(--amber);
-}
-.refresh-btn {
-  padding: 6px 14px;
-  border-radius: 6px;
-  font-size: 0.78rem;
-  cursor: pointer;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-family: inherit;
-  transition: all var(--transition-fast);
-}
-.refresh-btn:hover {
+.review-page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
   color: var(--text-primary);
-  border-color: var(--text-muted);
 }
-
-.post-card {
-  padding: 14px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  margin-bottom: 8px;
-}
-.tag-pending {
-  flex-shrink: 0;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  margin-top: 2px;
-  background: var(--amber-glow);
-  color: var(--amber);
-}
-.post-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  line-height: 1.4;
-}
-.post-meta {
+.heading,
+.queue-card {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 4px;
-  font-size: 0.72rem;
-  color: var(--text-muted);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
-.post-preview {
-  margin-top: 10px;
-  padding: 10px 12px;
-  background: var(--bg-sidebar);
+.heading {
+  margin-bottom: 20px;
+}
+h2,
+h3,
+p {
+  margin: 0;
+}
+h2 {
+  font-size: 1.2rem;
+  color: var(--amber);
+}
+h3 {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+p {
+  line-height: 1.7;
+}
+.heading p,
+.queue-info p,
+.detail-card header p,
+.cover-section p,
+.modal-hint {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 5px;
+}
+.queue-card,
+.detail-card {
+  background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 12px;
+}
+.queue-info {
+  min-width: 0;
+}
+button {
+  font: inherit;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  padding: 8px 14px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+.primary {
+  background: var(--amber);
+  color: var(--on-amber);
+}
+.danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+.title {
+  font-size: 1.2rem;
+}
+.detail-card header {
+  margin-bottom: 22px;
+}
+.cover-section {
+  margin-bottom: 18px;
+}
+.cover {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  margin-top: 8px;
+  object-fit: contain;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+.detail-card > .actions {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+}
+.notice {
+  margin-top: 16px;
+  padding: 10px;
+  color: var(--amber);
+  background: var(--amber-glow);
+  border-radius: 7px;
+  font-size: 0.82rem;
+}
+.history {
+  margin-top: 24px;
   font-size: 0.8rem;
   color: var(--text-secondary);
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
-.expand-link {
-  color: var(--amber);
+.history summary {
   cursor: pointer;
-  margin-left: 6px;
-  white-space: nowrap;
 }
-.expand-link:hover {
-  text-decoration: underline;
+.history article {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
 }
-
-.action-btn {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  cursor: pointer;
-  font-family: inherit;
-  transition: opacity var(--transition-fast);
-}
-.action-btn:hover {
-  opacity: 0.85;
-}
-.action-btn.primary {
-  background: var(--green);
-  color: #fff;
-  font-weight: 600;
-}
-.action-btn.danger {
-  background: var(--red);
-  color: #fff;
-}
-
-.reason-input {
+textarea {
   width: 100%;
   box-sizing: border-box;
-  padding: 8px 10px;
-  background: var(--bg-sidebar);
+  background: var(--bg-card);
+  color: var(--text-primary);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 0.82rem;
-  font-family: inherit;
+  font: inherit;
+  padding: 10px;
   resize: vertical;
-  outline: none;
+  margin-top: 8px;
 }
-.reason-input:focus {
-  border-color: var(--amber);
+label {
+  display: block;
+  margin-top: 14px;
+  font-size: 0.82rem;
 }
-.modal-btn {
-  flex: 1;
-  padding: 7px 0;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  cursor: pointer;
-  background: var(--bg-hover);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-family: inherit;
-  transition: all var(--transition-fast);
-}
-.modal-btn:hover {
-  color: var(--text-primary);
-}
-.modal-btn.primary {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: var(--on-amber);
-  font-weight: 600;
-}
-.modal-btn.primary:hover {
-  background: var(--amber-dim);
-  color: var(--on-amber);
+@media (max-width: 600px) {
+  .detail-card {
+    padding: 14px 12px;
+  }
+  .queue-card {
+    align-items: flex-start;
+  }
 }
 </style>

@@ -33,6 +33,12 @@ module.exports = async function interactSuite() {
     const after = (await http('GET', '/notifications', { token: authorTok })).data.data
     H.assert.equal(after.unread, unreadBefore - 1)
   })
+  await test('unread=1 → 仅返回未读通知且分页总数一致', async () => {
+    const result = (await http('GET', '/notifications?unread=1&pageSize=1', { token: authorTok })).data.data
+    H.assert.equal(result.pageSize, 1)
+    H.assert.ok(result.list.every(notification => notification.is_read === 0))
+    H.assert.equal(result.total, result.unread)
+  })
   await test('全部已读 → unread=0', async () => {
     const r = await http('PUT', '/notifications/read-all', { token: authorTok })
     H.assert.equal(r.status, 200)

@@ -1,5 +1,5 @@
-# SoulsGuide 生产部署（D24：Docker Compose 三容器方案，阶段八）
-# 服务：mysql（数据+自动初始化）+ server（Node 18 + FFmpeg）+ nginx（前端+反代+uploads 直出）
+# SoulsGuide 基础/本地部署（生产环境须叠加 docker-compose.prod.yml 启用 HTTPS）
+# 服务：mysql（持久化数据）+ server（Node 24 + FFmpeg）+ nginx（前端+反代，媒体先鉴权）
 # 2G 内存降配版（阿里云 2核2G 试用机实测方案）：
 #   - MySQL 关 performance_schema + 128M 缓冲池（省 ~300MB）
 #   - 每容器 mem_limit 上限，防止 FFmpeg 转码峰值 OOM 连坐杀 MySQL
@@ -14,6 +14,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: souls_guide
+      MYSQL_USER: ${MYSQL_USER:-souls_guide_app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置应用数据库密码 MYSQL_PASSWORD}
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
@@ -25,7 +27,7 @@ services:
       - --max-connections=50
     volumes:
       - mysql-data:/var/lib/mysql
-      # 首启自动初始化：schema（13 表）+ seed（admin + 7 游戏），幂等可重复执行
+      # 首启自动初始化：17 表 + 7 个预设游戏；管理员由服务启动引导创建。
       - ./server/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./server/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
     healthcheck:
@@ -35,6 +37,11 @@ services:
       retries: 10
       start_period: 60s
     mem_limit: 900m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   server:
     build: ./server
@@ -43,10 +50,16 @@ services:
     environment:
       PORT: 3000
       DB_HOST: mysql
-      DB_USER: root
-      DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      DB_USER: ${MYSQL_USER:-souls_guide_app}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置应用数据库密码 MYSQL_PASSWORD}
       DB_NAME: souls_guide
       JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      ANALYTICS_SALT: ${ANALYTICS_SALT:-}
+      NODE_ENV: ${NODE_ENV:-development}
+      TRUST_PROXY_HOPS: 1
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
       TZ: Asia/Shanghai
     volumes:
       - server-uploads:/app/uploads
@@ -63,7 +76,7 @@ services:
     container_name: sg-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${HTTP_PORT:-80}:80"
     volumes:
       # uploads 直出（10.4：nginx Range 支持视频拖动播放），与 server 容器同卷
       - server-uploads:/usr/share/nginx/html/uploads:ro

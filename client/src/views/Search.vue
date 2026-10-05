@@ -3,23 +3,33 @@ import { ref } from 'vue'
 import { postApi } from '../api'
 import PostCard from '../components/PostCard.vue'
 import { useLatestRequest } from '../composables/useLatestRequest'
+import { usePagination } from '../composables/usePagination'
+import AppPagination from '../components/AppPagination.vue'
+import type { Post } from '../types/api'
 
 const keyword = ref('')
-const results = ref<any[]>([])
+const results = ref<Post[]>([])
 const loading = ref(false)
 const error = ref('')
+const searchedKeyword = ref('')
+const { page, total, pageCount, pageSize, reset, go } = usePagination(12)
 // 请求序号防竞态（useLatestRequest）：快速连续搜索时旧响应后到会被丢弃，不再覆盖新结果
-const { next, isLatest } = useLatestRequest()
+const { next, isLatest, signal } = useLatestRequest()
 
-async function search() {
+async function search(resetPage = true) {
   if (!keyword.value.trim()) return
+  if (resetPage) {
+    searchedKeyword.value = keyword.value.trim()
+    reset()
+  }
   const seq = next()
   loading.value = true
   error.value = ''
   try {
-    const res = await postApi.getList({ keyword: keyword.value })
+    const res = await postApi.getList({ keyword: searchedKeyword.value, page: page.value, pageSize }, signal())
     if (!isLatest(seq)) return // 过期响应（已有更新的搜索请求发出）
     results.value = res.data.list
+    total.value = res.data.total
   } catch {
     if (!isLatest(seq)) return
     // 失败必须复位 loading 并提示（原实现无 catch，请求失败后页面永久停在"搜索中..."）
@@ -29,21 +39,28 @@ async function search() {
   }
 }
 
-function parse(p: any) {
+function goPage(nextPage: number) {
+  if (!go(nextPage)) return
+  search(false)
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function parse(p: Post) {
   return {
     id: p.id,
     title: p.title,
-    game: p.game_name,
+    game: p.game_name || `游戏ID:${p.game_id}`,
     category: p.category,
     tags: p.tags || [],
     views: p.view_count,
     likes: p.like_count,
     comments: p.comment_count,
-    time: p.created_at?.slice(0, 10),
-    author: p.username,
+    time: p.created_at?.slice(0, 10) || '',
+    author: p.username || '匿名',
     icon: '🗡️',
     cover: p.cover || '',
     avatar: p.avatar || '',
+    has_video: p.has_video === true,
   }
 }
 </script>
@@ -65,7 +82,7 @@ function parse(p: any) {
         v-model="keyword"
         placeholder="搜索攻略..."
         style="flex: 1; background: none; border: none; outline: none; color: var(--text-primary); font-size: 0.9rem"
-        @keyup.enter="search"
+        @keyup.enter="search()"
       />
     </div>
     <div v-if="loading" style="text-align: center; color: var(--text-muted); padding: 40px">搜索中...</div>
@@ -82,7 +99,7 @@ function parse(p: any) {
           font-size: 0.8rem;
           font-family: inherit;
         "
-        @click="search"
+        @click="search(false)"
       >
         重试
       </button>
@@ -93,6 +110,7 @@ function parse(p: any) {
     <div v-else class="article-feed">
       <PostCard v-for="p in results" :key="p.id" :post="parse(p)" />
     </div>
+    <AppPagination v-if="!loading && !error && results.length" :page="page" :page-count="pageCount" @change="goPage" />
   </div>
 </template>
 

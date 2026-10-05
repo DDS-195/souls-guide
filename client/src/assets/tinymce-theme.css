@@ -11,6 +11,7 @@
 .tox.tox-tinymce {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  max-width: 100%;
 }
 .tox.tox-fullscreen {
   background: var(--bg-deep);
@@ -251,4 +252,11 @@
 .tox .tox-code-view textarea {
   color: var(--text-primary);
   font-family: inherit;
+}
+
+/* 不依赖 UA 的窄屏工具栏与输入字号：桌面缩窗和手机都可用，避免 iOS 聚焦自动放大。 */
+@media (max-width: 767px) {
+  .tox .tox-tbtn { min-width: 40px; min-height: 40px; }
+  .tox .tox-textfield, .tox .tox-textarea, .tox .tox-selectfield select { font-size: 16px; }
+  .tox.tox-tinymce:not(.tox-fullscreen) { height: 400px !important; }
 }

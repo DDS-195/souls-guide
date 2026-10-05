@@ -1,0 +1,86 @@
+name: SoulsGuide CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest-root-password --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    defaults:
+      run:
+        working-directory: server
+    env:
+      DB_HOST: 127.0.0.1
+      DB_USER: root
+      DB_PASSWORD: test-root-password
+      DB_NAME: souls_guide
+      TEST_DB_NAME: souls_guide_ci_test
+      JWT_SECRET: ci-only-secret-not-used-in-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install media test tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg util-linux
+      - run: npm ci
+      - run: node --test test/runner-safety.test.cjs
+      - run: node --test test/media-capacity.test.cjs
+      - run: npm test
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci --prefix client
+      - run: npm run build --prefix client
+      - run: docker build -t souls-guide-server-ci ./server
+      - run: docker build -t souls-guide-nginx-ci -f nginx/Dockerfile .
+      - run: docker build -t souls-guide-nginx-prod-ci -f nginx/Dockerfile.prod .
+      - run: docker build -t souls-guide-nginx-http-ci -f nginx/Dockerfile.prod-http .
+      - run: docker run --rm --add-host server:127.0.0.1 -e SITE_HOST=192.0.2.1 souls-guide-nginx-http-ci nginx -t
+      - run: bash -n ops/backup.sh ops/restore.sh ops/check.sh nginx/19-site-config.sh
+      - run: node --test ops/preflight.test.cjs ops/restore.test.cjs
+      - name: Validate production Nginx configuration
+        run: |
+          mkdir -p /tmp/sg-certs
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=community.test' -keyout /tmp/sg-certs/privkey.pem -out /tmp/sg-certs/fullchain.pem
+          docker run --rm --add-host server:127.0.0.1 -e SITE_HOST=community.test -v /tmp/sg-certs:/etc/nginx/certs:ro souls-guide-nginx-prod-ci nginx -t
+      - run: MYSQL_ROOT_PASSWORD=ci-root MYSQL_PASSWORD=ci-app JWT_SECRET=ci-only-secret docker compose config --quiet

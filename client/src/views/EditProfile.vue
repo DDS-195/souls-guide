@@ -1,13 +1,21 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { userApi, mediaApi } from '../api'
+import { errorMessage } from '../utils/errors'
 
 const userStore = useUserStore()
+const router = useRouter()
 const saving = ref(false)
 const msg = ref('')
 
 const form = ref({ nickname: '', bio: '', gender: '', birthday: '' })
+const passwordForm = ref({ current_password: '', new_password: '', confirm_password: '' })
+const changingPassword = ref(false)
+const passwordMsg = ref('')
+let alive = true
+onBeforeUnmount(() => { alive = false })
 
 onMounted(async () => {
   try {
@@ -15,7 +23,7 @@ onMounted(async () => {
     if (!user) {
       // userInfo 内存态可能丢失（如刷新后直入本页的极端时序）：拉取后同步回 store，
       // 保证后续 uploadAvatar/save 里 userStore.userInfo 非 null（原实现只取不存）
-      const me: any = await userApi.getMe()
+      const me = await userApi.getMe()
       user = me.data
       userStore.setUserInfo(me.data)
     }
@@ -39,27 +47,52 @@ async function uploadAvatar(e: Event) {
     const res = await mediaApi.uploadAvatar(file)
     if (userStore.userInfo) userStore.userInfo.avatar = res.data.url
     msg.value = '头像已更新'
-  } catch (e2: any) {
-    msg.value = e2?.response?.data?.message || '头像上传失败（≤5MB）'
+  } catch (error: unknown) {
+    msg.value = errorMessage(error, '头像上传失败（≤5MB）')
   }
 }
 
 async function save() {
+  if (saving.value || !alive) return
+  const session = userStore.token
+  const accountId = userStore.userInfo?.id
+  const submitted = { ...form.value }
   saving.value = true
   msg.value = ''
   try {
-    await userApi.updateProfile(form.value)
+    await userApi.updateProfile(submitted)
+    if (!alive || userStore.token !== session || userStore.userInfo?.id !== accountId) return
     if (userStore.userInfo) {
-      userStore.userInfo.nickname = form.value.nickname
-      userStore.userInfo.bio = form.value.bio
-      userStore.userInfo.gender = form.value.gender
-      userStore.userInfo.birthday = form.value.birthday
+      Object.assign(userStore.userInfo, submitted)
     }
-    msg.value = '保存成功'
-  } catch (e: any) {
-    msg.value = e.response?.data?.message || '保存失败'
+    msg.value = JSON.stringify(form.value) === JSON.stringify(submitted)
+      ? '保存成功'
+      : '已保存提交时的资料，当前新修改尚未保存'
+  } catch (error: unknown) {
+    if (alive && userStore.token === session) msg.value = errorMessage(error, '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+async function changePassword() {
+  passwordMsg.value = ''
+  if (passwordForm.value.new_password !== passwordForm.value.confirm_password) {
+    passwordMsg.value = '两次输入的新密码不一致'
+    return
+  }
+  changingPassword.value = true
+  try {
+    await userApi.changePassword({
+      current_password: passwordForm.value.current_password,
+      new_password: passwordForm.value.new_password,
+    })
+    userStore.logout()
+    await router.replace('/login')
+  } catch (error: unknown) {
+    passwordMsg.value = errorMessage(error, '密码修改失败')
+  } finally {
+    changingPassword.value = false
   }
 }
 </script>
@@ -140,6 +173,17 @@ async function save() {
     >
       {{ saving ? '保存中...' : '保存' }}
     </button>
+
+    <section class="password-card">
+      <h2>修改密码</h2>
+      <input v-model="passwordForm.current_password" class="inp" type="password" autocomplete="current-password" placeholder="当前密码" />
+      <input v-model="passwordForm.new_password" class="inp" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="新密码（8~72 位）" />
+      <input v-model="passwordForm.confirm_password" class="inp" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="再次输入新密码" />
+      <p v-if="passwordMsg" class="password-message">{{ passwordMsg }}</p>
+      <button class="password-button" :disabled="changingPassword" @click="changePassword">
+        {{ changingPassword ? '修改中...' : '修改密码' }}
+      </button>
+    </section>
   </div>
 </template>
 
@@ -166,5 +210,32 @@ async function save() {
 }
 select.inp {
   cursor: pointer;
+}
+.password-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border-subtle);
+}
+.password-card h2 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+.password-message {
+  margin: 0;
+  color: var(--red);
+  font-size: 0.85rem;
+}
+.password-button {
+  padding: 11px;
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--amber);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
 }
 </style>

@@ -1,10 +1,19 @@
 {
   "name": "souls-guide-server",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
+  },
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "node --watch server.js",
+    "db:migrate": "node scripts/migrate.js",
+    "test": "node test/run-all.js",
+    "cleanup:assets": "node -e \"require('dotenv').config(); require('./src/services/cleanupService').cleanupExpiredAssets({limit:500}).then(n=>{console.log('cleaned',n);process.exit(0)}).catch(e=>{console.error(e);process.exit(1)})\""
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -14,9 +23,7 @@
     "jsonwebtoken": "^9.0.0",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "mysql2": "^3.11.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
+    "mysql2": "^3.11.0",
+    "sharp": "^0.35.4"
   }
 }

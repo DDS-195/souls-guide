@@ -1,13 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '../stores/user'
-import { userApi } from '../api'
+import { toast } from '../utils/toast'
 
 const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, from, saved) {
+    // Homepage restores after its results exist; query-only filters must not jump early.
+    if (to.name === 'Home' || to.path === from.path) return false
+    return saved || { left: 0, top: 0, behavior: 'instant' }
+  },
   routes: [
     { path: '/', name: 'Home', component: () => import('../views/Home.vue') },
     { path: '/post/:id', name: 'PostDetail', component: () => import('../views/PostDetail.vue') },
-    { path: '/search', name: 'Search', component: () => import('../views/Search.vue') },
+    { path: '/search', name: 'Search', redirect: to => ({ path: '/', query: { ...to.query, q: to.query.q || to.query.keyword || undefined, keyword: undefined } }) },
     { path: '/user/:id', name: 'UserProfile', component: () => import('../views/UserProfile.vue') },
     {
       path: '/notifications',
@@ -62,16 +67,19 @@ const router = createRouter({
     {
       path: '/admin',
       meta: { auth: true, roles: ['admin'] },
+      redirect: '/admin/pending',
       children: [
         { path: 'pending', name: 'Pending', component: () => import('../views/admin/Pending.vue') },
         { path: 'applications', name: 'Applications', component: () => import('../views/admin/Applications.vue') },
         { path: 'reports', name: 'Reports', component: () => import('../views/admin/Reports.vue') },
         { path: 'announcements', name: 'Announcements', component: () => import('../views/admin/Announcements.vue') },
+        { path: 'notifications-send', name: 'NotificationBroadcast', component: () => import('../views/admin/NotificationBroadcast.vue') },
         { path: 'games', name: 'Games', component: () => import('../views/admin/Games.vue') },
         { path: 'users', name: 'UserManage', component: () => import('../views/admin/UserManage.vue') },
         { path: 'logs', name: 'AdminLogs', component: () => import('../views/admin/AdminLogs.vue') },
       ],
     },
+    { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('../views/NotFound.vue') },
   ],
 })
 
@@ -79,18 +87,17 @@ router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
   if (!to.meta.auth) return next()
   if (!userStore.token) return next({ path: '/login', query: { redirect: to.fullPath } })
-  // 刷新后 userInfo 是内存态会丢失（token 在 localStorage 保留）：守卫先异步恢复，
-  // 避免 creator/admin 被误判为 user 踢回首页（2026-08-09 P1-4 修复）
-  if (!userStore.userInfo) {
-    try {
-      const me: any = await userApi.getMe()
-      if (me?.data) userStore.setUserInfo(me.data)
-    } catch {
-      // 401 已由 request 拦截器 logout + 跳登录，这里兜底清态
-      userStore.logout()
-      return next({ path: '/login', query: { redirect: to.fullPath } })
-    }
+  const session = userStore.token
+  try {
+    await userStore.ensureUserInfo()
+  } catch {
+    // 临时故障保留有效 token，在登录页重试完整资料，不能让无 id 的身份进入私有页面。
+    if (!userStore.token) return next({ path: '/login', query: { redirect: to.fullPath } })
+    if (userStore.token !== session) return next(false)
+    toast('用户资料暂时无法加载，请重试', 'error')
+    return next({ path: '/login', query: { redirect: to.fullPath } })
   }
+  if (userStore.token !== session) return next(false)
   const roles = to.meta.roles as string[] | undefined
   if (roles && !roles.includes(userStore.role)) return next({ path: '/' })
   next()

@@ -1,0 +1,8 @@
+FROM nginx:alpine
+
+COPY client/dist /usr/share/nginx/html
+COPY nginx/nginx.prod.conf /etc/nginx/nginx.prod.template
+COPY nginx/security-headers.conf /etc/nginx/security-headers.conf
+COPY nginx/19-site-config.sh /docker-entrypoint.d/19-site-config.sh
+RUN chmod +x /docker-entrypoint.d/19-site-config.sh
+RUN chmod -R o+rX /usr/share/nginx/html

@@ -9,15 +9,19 @@ import AppPagination from '../../components/AppPagination.vue'
 import AppEmpty from '../../components/AppEmpty.vue'
 import AppModal from '../../components/AppModal.vue'
 import { usePagination } from '../../composables/usePagination'
+import { useLatestRequest } from '../../composables/useLatestRequest'
+import { errorMessage } from '../../utils/errors'
+import type { PageQuery, Report, ReportStatus } from '../../types/api'
 
-const list = ref<any[]>([])
+const list = ref<Report[]>([])
 const loading = ref(true)
 const error = ref('')
 const tab = ref<'all' | 'pending' | 'resolved' | 'dismissed'>('pending')
 const { page, total, pageCount, pageSize, go, reset } = usePagination(10)
+const { next, isLatest } = useLatestRequest()
 
 // 处理弹窗
-const handleTarget = ref<any>(null)
+const handleTarget = ref<Report | null>(null)
 const handleStatus = ref<'resolved' | 'dismissed'>('resolved')
 const handleNote = ref('')
 
@@ -29,18 +33,24 @@ const TABS = [
 ] as const
 
 async function load() {
+  const sequence = next()
   loading.value = true
   error.value = ''
   try {
-    const params: any = { page: page.value, pageSize }
+    const params: PageQuery & { status?: ReportStatus } = { page: page.value, pageSize }
     if (tab.value !== 'all') params.status = tab.value
-    const r: any = await adminApi.getReports(params)
+    const r = await adminApi.getReports(params)
+    if (!isLatest(sequence)) return
     list.value = r.data.list || []
     total.value = r.data.total || 0
-  } catch (e: any) {
-    error.value = e?.response?.data?.message || '加载失败，请重试'
+    if (page.value > pageCount.value) {
+      page.value = pageCount.value
+      return load()
+    }
+  } catch (requestError: unknown) {
+    if (isLatest(sequence)) error.value = errorMessage(requestError, '加载失败，请重试')
   } finally {
-    loading.value = false
+    if (isLatest(sequence)) loading.value = false
   }
 }
 
@@ -71,11 +81,11 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
 }
 
 /** 是否有可跳转的目标页（comment 举报后端未存 post_id，无法定位文章 → 不可跳转） */
-function canJump(r: any): boolean {
+function canJump(r: Report): boolean {
   return r.target_type === 'post' || r.target_type === 'user'
 }
 
-function targetUrl(r: any): string {
+function targetUrl(r: Report): string {
   if (r.target_type === 'user') return `/user/${r.target_id}`
   if (r.target_type === 'post') return `/post/${r.target_id}`
   // comment：后端 reports 只存评论 id（未存所属文章 post_id），前端无法定位文章 → 不提供跳转
@@ -83,7 +93,7 @@ function targetUrl(r: any): string {
   return '/'
 }
 
-function openHandle(r: any) {
+function openHandle(r: Report) {
   handleTarget.value = r
   handleStatus.value = 'resolved'
   handleNote.value = ''
@@ -99,8 +109,8 @@ async function confirmHandle() {
     toast(handleStatus.value === 'resolved' ? '已标记处理' : '已驳回举报', 'success')
     handleTarget.value = null
     load() // 刷新当前 tab（全部 tab 下状态标签同步更新）
-  } catch (e: any) {
-    toast(e?.response?.data?.message || '操作失败，请重试', 'error')
+  } catch (error: unknown) {
+    toast(errorMessage(error, '操作失败，请重试'), 'error')
   }
 }
 </script>
@@ -130,7 +140,7 @@ async function confirmHandle() {
     </div>
 
     <!-- 加载/错误/空态（AppEmpty 统一三件套） -->
-    <AppEmpty :loading="loading" :error="error" empty-text="暂无举报" icon="🛡️" @retry="load" />
+    <AppEmpty v-if="loading || error || !list.length" :loading="loading" :error="error" empty-text="暂无举报" icon="🛡️" @retry="load" />
 
     <!-- 举报列表 -->
     <template v-if="!loading && !error && list.length">
@@ -164,7 +174,7 @@ async function confirmHandle() {
     </template>
 
     <!-- 处理弹窗（AppModal 统一弹窗） -->
-    <AppModal v-if="handleTarget" title="处理举报" @close="handleTarget = null">
+    <AppModal :open="Boolean(handleTarget)" title="处理举报" @close="handleTarget = null"><template v-if="handleTarget">
       <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.6">
         {{ TARGET_NAMES[handleTarget.target_type] || handleTarget.target_type }} #{{ handleTarget.target_id }}
         <span v-if="parseReason(handleTarget.reason).type" class="type-tag" style="margin-left: 6px">{{
@@ -194,7 +204,7 @@ async function confirmHandle() {
         <button class="modal-btn" @click="handleTarget = null">取消</button>
         <button class="modal-btn primary" @click="confirmHandle">确认处理</button>
       </div>
-    </AppModal>
+    </template></AppModal>
   </div>
 </template>
 

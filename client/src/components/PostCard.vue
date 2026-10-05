@@ -1,8 +1,20 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
-const router = useRouter()
+import { ref, watch } from 'vue'
+import UserAvatar from './UserAvatar.vue'
+import VideoCoverBadge from './VideoCoverBadge.vue'
+import { imageVariant, imageSrcset } from '../utils/responsiveImage'
+import { playFeedback } from '../utils/motion'
+import { useRoute } from 'vue-router'
+import { captureArticleOrigin } from '../utils/articleMotion'
 
-defineProps<{
+const route = useRoute()
+
+const props = defineProps<{
+  compact?: boolean
+  eager?: boolean
+  priority?: boolean
+  imageSizes?: string
+  maxImageWidth?: number
   post: {
     id?: number
     title: string
@@ -18,8 +30,14 @@ defineProps<{
     icon?: string
     cover?: string
     avatar?: string
+    has_video?: boolean
   }
 }>()
+const coverFailed = ref(false)
+function coverLoaded(event: Event) {
+  if (!props.eager && !props.priority) playFeedback(event.target as HTMLImageElement, 'image')
+}
+watch(() => props.post.cover, () => { coverFailed.value = false })
 function fmt(n: number): string {
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
   return String(n)
@@ -27,17 +45,18 @@ function fmt(n: number): string {
 </script>
 
 <template>
-  <article class="card" @click="router.push(`/post/${post.id}`)">
-    <div class="card-cover">
-      <img v-if="post.cover" class="card-cover-img" :src="post.cover" alt="" loading="lazy" />
+  <article class="card" :data-post-id="post.id" :class="{ 'card--compact': compact }">
+    <div class="card-cover" :class="{ 'card-cover--empty': !post.cover || coverFailed }">
+      <img v-if="post.cover && !coverFailed" class="card-cover-img" :src="imageVariant(post.cover, 800)" :srcset="imageSrcset(post.cover, maxImageWidth)" :sizes="imageSizes || '(max-width: 767px) calc(100vw - 30px), (max-width: 1100px) 45vw, 360px'" width="1280" height="720" alt="" :loading="eager ? 'eager' : 'lazy'" :fetchpriority="priority ? 'high' : 'auto'" decoding="async" @load="coverLoaded" @error="coverFailed = true" />
       <span v-else class="cover-placeholder">{{ post.icon }}</span>
+      <VideoCoverBadge v-if="post.has_video" />
       <div class="card-badges">
         <span v-if="post.game" class="badge badge-game">{{ post.game }}</span>
         <span v-if="post.category" class="badge badge-category">{{ post.category }}</span>
       </div>
     </div>
     <div class="card-body">
-      <h3 class="card-title">{{ post.title }}</h3>
+      <h3 class="card-title"><router-link :to="`/post/${post.id}`" @click="captureArticleOrigin($event, post.id, route.fullPath)">{{ post.title }}</router-link></h3>
       <div class="card-tags">
         <span v-for="t in post.tags" :key="t" class="tag">#{{ t }}</span>
       </div>
@@ -63,19 +82,18 @@ function fmt(n: number): string {
           </svg>
           {{ post.comments }}
         </span>
-        <span>{{ post.time }}</span>
+        <span class="meta-time">{{ post.time }}</span>
       </div>
       <div class="card-bottom">
         <router-link v-if="post.user_id" :to="`/user/${post.user_id}`" class="card-author" @click.stop>
-          <img v-if="post.avatar" class="author-avatar" :src="post.avatar" alt="" loading="lazy" />
-          <span v-else class="author-avatar author-avatar--fallback"></span>
-          {{ post.author }}
+          <UserAvatar :src="post.avatar" :name="post.author" :size="22" />
+          <span class="author-name" :title="post.author">{{ post.author }}</span>
         </router-link>
         <div v-else class="card-author">
-          <img v-if="post.avatar" class="author-avatar" :src="post.avatar" alt="" loading="lazy" />
-          <span v-else class="author-avatar author-avatar--fallback"></span>
-          {{ post.author }}
+          <UserAvatar :src="post.avatar" :name="post.author" :size="22" />
+          <span class="author-name" :title="post.author">{{ post.author }}</span>
         </div>
+        <span class="card-time">{{ post.time }}</span>
       </div>
     </div>
   </article>
@@ -88,11 +106,11 @@ function fmt(n: number): string {
   border-radius: 10px;
   overflow: hidden;
   cursor: pointer;
-  transition: all 250ms;
+  transition: transform 200ms var(--motion-ease), border-color 180ms, box-shadow 200ms;
   display: flex;
   flex-direction: column;
 }
-.card:hover {
+.card:focus-within {
   border-color: var(--border-hover);
   box-shadow: 0 4px 20px var(--amber-glow);
 }
@@ -101,6 +119,15 @@ function fmt(n: number): string {
   aspect-ratio: 16/9;
   background: linear-gradient(135deg, var(--bg-hover), var(--bg-card));
   overflow: hidden;
+}
+.card-cover::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: linear-gradient(112deg, transparent 34%, rgba(255, 225, 166, .11) 49%, transparent 64%);
+  pointer-events: none;
+  transform: translateX(-115%);
 }
 .cover-placeholder {
   position: absolute;
@@ -112,6 +139,7 @@ function fmt(n: number): string {
   opacity: 0.3;
 }
 .card-cover-img {
+  transition: transform 260ms var(--motion-ease);
   position: absolute;
   inset: 0;
   width: 100%;
@@ -120,6 +148,7 @@ function fmt(n: number): string {
 }
 .card-badges {
   position: absolute;
+  z-index: 2;
   top: 8px;
   left: 8px;
   display: flex;
@@ -212,5 +241,47 @@ function fmt(n: number): string {
 }
 .author-avatar--fallback {
   background: linear-gradient(135deg, var(--amber-dim), var(--bg-hover));
+}
+.card { position: relative; min-width: 0; }
+.card-title a { color: inherit; text-decoration: none; }
+.card-title a::after { content: ''; position: absolute; inset: 0; z-index: 1; }
+.card-title a:focus-visible::after { outline: 2px solid var(--amber); outline-offset: -3px; border-radius: 10px; }
+.card-author { position: relative; z-index: 2; overflow-wrap: anywhere; min-width: 0; }
+.card-badges { right: 8px; }
+.badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-body { min-width: 0; }
+.card-title, .tag { overflow-wrap: anywhere; }
+/* 首页统一分区：缺图、短标题和无标签都不改变卡片尺寸。 */
+.card--compact .card-cover { aspect-ratio: 2; flex-shrink: 0; }
+.card--compact .card-title { height: 2.8em; flex-shrink: 0; }
+.card--compact .card-tags { height: 22px; flex-shrink: 0; flex-wrap: nowrap; overflow: hidden; }
+.card--compact .tag { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card--compact .card-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 8px; }
+.card--compact .card-meta > :last-child { grid-column: 1 / -1; }
+.card--compact .meta-item { min-width: 0; overflow: hidden; white-space: nowrap; }
+.card--compact .card-bottom { height: 30px; flex-shrink: 0; }
+.card--compact .card-author { max-width: 100%; }
+.author-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-time { display:none; }
+@media (max-width: 767px) {
+  .card--compact .card-cover { aspect-ratio:2.5; }
+  .card--compact .card-body { padding:10px 12px; }
+  .card--compact .card-title { height:auto; margin-bottom:6px; }
+  .card--compact .card-tags { height:20px; margin-bottom:6px; }
+  .card--compact .card-tags:empty { display:none; }
+  .card--compact .card-meta { gap:4px 8px; }
+  .card--compact .meta-time { display:none; }
+  .card--compact .card-bottom { height:28px; padding-top:6px; gap:10px; justify-content:space-between; }
+  .card--compact .card-author { flex:1; }
+  .card--compact .card-time { display:block; flex-shrink:0; font-size:.68rem; color:var(--text-muted); white-space:nowrap; }
+}
+@media (min-width: 768px) and (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .card:hover { transform: translateY(-3px); border-color: var(--border-hover); box-shadow: 0 7px 22px var(--amber-glow); }
+  .card:hover .card-cover-img { transform: scale(1.025); }
+  .card-cover::after { transition: transform 540ms var(--motion-ease); }
+  .card:hover .card-cover::after { transform: translateX(115%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card, .card-cover-img { transition: none; }
 }
 </style>

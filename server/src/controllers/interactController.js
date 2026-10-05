@@ -1,16 +1,17 @@
 const interactService = require('../services/interactService')
 const response = require('../utils/response')
+const parsePagination = require('../utils/pagination')
 
 async function like(req, res) {
   const liked = await interactService.toggleLike(req.user.id, +req.params.id)
   if (liked === null) return response.error(res, '文章不存在', 404, 404)
-  response.success(res, { liked })
+  response.success(res, liked)
 }
 
 async function favorite(req, res) {
-  const favorited = await interactService.toggleFavorite(req.user.id, +req.params.id)
-  if (favorited === null) return response.error(res, '文章不存在', 404, 404)
-  response.success(res, { favorited })
+  const result = await interactService.toggleFavorite(req.user.id, +req.params.id)
+  if (result === null) return response.error(res, '文章不存在', 404, 404)
+  response.success(res, result)
 }
 
 async function follow(req, res) {
@@ -21,12 +22,23 @@ async function follow(req, res) {
 }
 
 async function getComments(req, res) {
-  const comments = await interactService.getComments(+req.params.postId)
-  response.success(res, comments)
+  const options = parsePagination(req.query, { defaultPageSize: 20, maxPageSize: 50 })
+  for (const key of ['parent_id', 'focus_id']) {
+    if (req.query[key] !== undefined) {
+      if (!/^[1-9]\d*$/.test(String(req.query[key])) || !Number.isSafeInteger(Number(req.query[key]))) return response.error(res, '评论编号无效')
+      options[key] = Number(req.query[key])
+    }
+  }
+  const result = await interactService.getComments(
+    +req.params.postId,
+    options
+  )
+  if (result === null) return response.error(res, '文章不存在', 404, 404)
+  response.paginated(res, result)
 }
 
 async function addComment(req, res) {
-  if (!req.body.content) return response.error(res, '评论内容不能为空')
+  if (typeof req.body.content !== 'string' || !req.body.content.trim()) return response.error(res, '评论内容不能为空')
   if (req.body.content.length > 2000) return response.error(res, '评论内容不能超过 2000 字')
   // 2026-08-13 修复（P1-5）：parent_id 必须存在且属于当前文章，防评论树错乱（挂到其他文章的评论下）
   const parentId = req.body.parent_id ? +req.body.parent_id : null
@@ -42,7 +54,7 @@ async function addComment(req, res) {
 }
 
 async function replyComment(req, res) {
-  if (!req.body.content) return response.error(res, '回复内容不能为空')
+  if (typeof req.body.content !== 'string' || !req.body.content.trim()) return response.error(res, '回复内容不能为空')
   if (req.body.content.length > 2000) return response.error(res, '回复内容不能超过 2000 字')
   const id = await interactService.replyComment(req.user.id, +req.params.commentId, req.body.content)
   if (id === null) return response.error(res, '原评论不存在', 404, 404)
@@ -56,25 +68,44 @@ async function deleteComment(req, res) {
   if (req.user.role !== 'admin' && comment.user_id !== req.user.id) {
     return response.error(res, '无权删除他人评论', 403, 403)
   }
-  await interactService.deleteComment(comment.id, comment.post_id)
-  response.success(res, null, '删除成功')
+  const commentCount = await interactService.deleteComment(comment.id, comment.post_id, req.user.id)
+  response.success(res, { comment_count: commentCount }, '删除成功')
 }
 
 async function getFavorites(req, res) {
-  const { page, pageSize } = req.query
-  const result = await interactService.getFavorites(req.user.id, { page: +page || 1, pageSize: +pageSize || 10 })
+  const options = articleListOptions(req.query)
+  if (!options) return response.error(res, '游戏编号无效')
+  const result = await interactService.getFavorites(req.user.id, options)
+  response.paginated(res, result)
+}
+
+function articleListOptions(query) {
+  const { game_id } = query
+  if (game_id !== undefined && (typeof game_id !== 'string' || !/^[1-9]\d*$/.test(game_id) || !Number.isSafeInteger(Number(game_id)))) return null
+  return { ...parsePagination(query, { defaultPageSize:10, maxPageSize:50 }), game_id }
+}
+
+async function getFollowingFeed(req, res) {
+  const options = articleListOptions(req.query)
+  if (!options) return response.error(res, '游戏编号无效')
+  const result = await require('../services/postService').findList({ ...options, following_user_id:req.user.id })
   response.paginated(res, result)
 }
 
 async function getNotifications(req, res) {
-  const { page, pageSize } = req.query
-  const result = await interactService.getNotifications(req.user.id, { page: +page || 1, pageSize: +pageSize || 20 })
+  if (req.query.unread !== undefined && !['0','1'].includes(req.query.unread)) return response.error(res, '未读筛选无效')
+  const pagination = parsePagination(req.query, { defaultPageSize: 20 })
+  const result = await interactService.getNotifications(req.user.id, {
+    ...pagination,
+    unreadOnly: req.query.unread === '1',
+    type: req.query.type,
+  })
   response.success(res, result)
 }
 
 async function markRead(req, res) {
-  await interactService.markRead(req.user.id, req.params.id || null)
-  response.success(res, null, 'ok')
+  const result = await interactService.markRead(req.user.id, req.params.id || null, req.body?.cutoff_id, req.body?.type)
+  response.success(res, result, 'ok')
 }
 
 // GET /api/users/:id/followers —— 粉丝列表（公开）
@@ -93,16 +124,14 @@ async function report(req, res) {
 }
 
 async function getFollowers(req, res) {
-  const { page, pageSize } = req.query
-  const result = await interactService.getFollowers(+req.params.id, { page: +page || 1, pageSize: +pageSize || 10 })
+  const result = await interactService.getFollowers(+req.params.id, parsePagination(req.query, { defaultPageSize: 10 }))
   response.paginated(res, result)
 }
 
 // GET /api/users/:id/following —— 关注列表（公开）
 async function getFollowing(req, res) {
-  const { page, pageSize } = req.query
-  const result = await interactService.getFollowing(+req.params.id, { page: +page || 1, pageSize: +pageSize || 10 })
+  const result = await interactService.getFollowing(+req.params.id, parsePagination(req.query, { defaultPageSize: 10 }))
   response.paginated(res, result)
 }
 
-module.exports = { like, favorite, follow, getComments, addComment, replyComment, deleteComment, getFavorites, getNotifications, markRead, getFollowers, getFollowing, report }
+module.exports = { like, favorite, follow, getComments, addComment, replyComment, deleteComment, getFavorites, getFollowingFeed, getNotifications, markRead, getFollowers, getFollowing, report }

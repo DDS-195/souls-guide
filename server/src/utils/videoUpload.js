@@ -27,4 +27,4 @@ const videoChunkUpload = multer({
   limits: { fileSize: CHUNK_LIMIT },
 })
 
-module.exports = { videoChunkUpload, ALLOWED_EXT, MAX_TOTAL_CHUNKS }
+module.exports = { videoChunkUpload, ALLOWED_EXT, MAX_TOTAL_CHUNKS, MAX_CHUNK_SIZE, MAX_VIDEO_SIZE: MAX_CHUNK_SIZE * MAX_TOTAL_CHUNKS }

@@ -15,6 +15,9 @@ router.post('/upload/video/status', auth, authorize('creator', 'admin'), ah(medi
 router.post('/upload/video/chunk', auth, authorize('creator', 'admin'), videoChunkUpload.single('chunk'), ah(mediaController.videoChunk))
 router.post('/upload/video/merge', auth, authorize('creator', 'admin'), ah(mediaController.videoMerge))
 
+// 主动撤销尚未绑定文章的临时上传；已绑定资产必须通过文章更新/删除解除引用。
+router.delete('/assets/:assetId', auth, authorize('creator', 'admin'), ah(mediaController.deleteTemporaryAsset))
+
 // 删除媒体（auth+本人/admin：media 行 + 磁盘文件，见设计文档 4.1 媒体模块）
 router.delete('/:id', auth, authorize('creator', 'admin'), ah(mediaController.deleteMedia))
 

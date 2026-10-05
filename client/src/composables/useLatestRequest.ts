@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, onScopeDispose } from 'vue'
 
 /**
  * useLatestRequest — 请求序号防竞态 composable（2026-08-16 组件复用改造）
@@ -15,9 +15,13 @@ import { ref } from 'vue'
  */
 export function useLatestRequest() {
   const seq = ref(0)
+  let controller = new AbortController()
+  onScopeDispose(() => { seq.value++; controller.abort() })
 
   /** 发起新请求：递增序号并返回本次请求的代号 */
   function next(): number {
+    controller.abort()
+    controller = new AbortController()
     return ++seq.value
   }
 
@@ -26,5 +30,5 @@ export function useLatestRequest() {
     return s === seq.value
   }
 
-  return { seq, next, isLatest }
+  return { seq, next, isLatest, signal: () => controller.signal }
 }

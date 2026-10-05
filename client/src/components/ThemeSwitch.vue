@@ -1,71 +1,65 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useTheme } from '../utils/theme'
+import AppModal from './AppModal.vue'
 
-const { isDark, toggle } = useTheme()
+const { isDark, setDark } = useTheme()
 const visible = ref(false)
-
-function setDark(v: boolean) {
-  if (v !== isDark.value) toggle()
+function choose(dark: boolean) {
+  setDark(dark)
   visible.value = false
 }
-function open() {
-  visible.value = true
-}
-defineExpose({ open })
+defineExpose({
+  open: () => {
+    visible.value = true
+  },
+})
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="ts-overlay" @click.self="visible = false">
-      <div class="ts-card">
-        <div class="ts-option" @click="setDark(true)">打开</div>
-        <div class="ts-option" @click="setDark(false)">关闭</div>
-        <div class="ts-cancel" @click="visible = false">取消</div>
-      </div>
+  <AppModal :open="Boolean(visible)" title="显示模式" max-width="280px" @close="visible = false"><template v-if="visible">
+    <div class="theme-options" role="group" aria-label="选择显示模式">
+      <button type="button" :aria-pressed="isDark" @click="choose(true)">深色 <span v-if="isDark">✓ 当前</span></button>
+      <button type="button" :aria-pressed="!isDark" @click="choose(false)">
+        浅色 <span v-if="!isDark">✓ 当前</span>
+      </button>
     </div>
-  </Teleport>
+    <button type="button" class="cancel" @click="visible = false">取消</button>
+  </template></AppModal>
 </template>
 
 <style scoped>
-.ts-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
+.theme-options {
+  display: grid;
+  gap: 8px;
 }
-.ts-card {
-  background: var(--bg-card, #1a1f26);
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
-  border-radius: 12px;
+button {
   width: 100%;
-  max-width: 220px;
-  overflow: hidden;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
 }
-.ts-option {
-  padding: 12px 16px;
-  font-size: 0.9rem;
-  color: var(--text-primary, #e2e8f0);
-  cursor: pointer;
+button[aria-pressed='true'] {
+  border-color: var(--amber);
+}
+button span {
+  float: right;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+button:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+.cancel {
+  margin-top: 12px;
   text-align: center;
-  transition: background 150ms;
-}
-.ts-option:hover {
-  background: var(--bg-hover, #1e242c);
-}
-.ts-option:first-child {
-  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
-}
-.ts-cancel {
-  padding: 10px 16px;
-  font-size: 0.82rem;
-  color: var(--text-muted, #64748b);
-  cursor: pointer;
-  text-align: center;
-  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  color: var(--text-secondary);
+  background: transparent;
 }
 </style>

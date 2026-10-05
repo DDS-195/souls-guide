@@ -25,24 +25,35 @@ export function toast(message: string, type: 'info' | 'success' | 'error' = 'inf
       'font-size:0.85rem',
       'z-index:10001',
       'box-shadow:0 8px 24px rgba(0,0,0,0.3)',
-      'transition:opacity 0.25s ease',
       'max-width:80vw',
-      'white-space:nowrap',
+      'white-space:normal',
+      'pointer-events:none',
       'overflow:hidden',
       'text-overflow:ellipsis',
     ].join(';')
     document.body.appendChild(el)
+    el.setAttribute('role', 'status')
   }
   clearTimeout(hideTimer)
   clearTimeout(removeTimer)
   el.style.opacity = '1'
   el.style.borderColor = type === 'success' ? 'var(--green)' : type === 'error' ? 'var(--red)' : 'var(--border-subtle)'
   el.textContent = message
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  el.getAnimations().forEach(animation => animation.cancel())
+  if (!reduced) el.animate([
+    { opacity: 0, transform: 'translate(-50%, 8px) scale(.98)' },
+    { opacity: 1, transform: 'translate(-50%, 0) scale(1)' },
+  ], { duration: 200, easing: 'cubic-bezier(.2,.7,.3,1)' })
   hideTimer = setTimeout(() => {
-    if (el) el.style.opacity = '0'
+    if (!el) return
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) el.animate([
+      { opacity: 1, transform: 'translate(-50%, 0)' }, { opacity: 0, transform: 'translate(-50%, 4px)' },
+    ], { duration: 150, fill: 'forwards' })
+    else el.style.opacity = '0'
   }, 3000)
   removeTimer = setTimeout(() => {
     el?.remove()
     el = null
-  }, 3250)
+  }, 3150)
 }

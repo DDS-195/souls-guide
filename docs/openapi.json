@@ -1,0 +1,2386 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SoulsGuide HTTP API",
+    "version": "5.0.0",
+    "description": "SoulsGuide 可执行路由契约。CI/后端测试会校验这里的 method/path 与 Express 实现双向一致。所有 JSON 响应使用 {code,message,data} 信封。"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "当前部署"
+    }
+  ],
+  "paths": {
+    "/api/users/register": {
+      "post": {
+        "summary": "注册",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/login": {
+      "post": {
+        "summary": "登录",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/me": {
+      "get": {
+        "summary": "当前用户资料",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "put": {
+        "summary": "更新当前用户资料",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/me/password": {
+      "put": {
+        "summary": "修改密码并使旧令牌失效",
+        "description": "当前密码错误返回 400，不使已有登录失效；成功修改后旧令牌失效。401 仅表示凭证无效，鉴权数据库故障交给服务错误处理。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/apply-creator": {
+      "post": {
+        "summary": "申请创作者",
+        "description": "普通且未封禁用户提交新一轮申请。同一用户最多一条待审申请。成功 data 为 {id:申请ID}；理由会 trim，按 JavaScript UTF-16 长度限制。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["reason"],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/me/avatar": {
+      "post": {
+        "summary": "上传头像",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/{id}": {
+      "get": {
+        "summary": "用户公开主页",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/games": {
+      "get": {
+        "summary": "启用游戏列表",
+        "description": "默认仅启用；历史筛选可读取停用游戏。稳定按 sort_order,id 排序，包含 version。",
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["0", "1"], "default": "0" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "post": {
+        "summary": "创建游戏",
+        "description": "默认启用且追加末尾，名称 trim 后必填。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 50 },
+                  "description": { "type": "string", "maxLength": 500 },
+                  "cover": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 500,
+                    "description": "本地 /uploads/images/ 路径"
+                  },
+                  "sort_order": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/games/sort": {
+      "put": {
+        "summary": "批量排序游戏",
+        "description": "检查每项版本，任一冲突返回 409 并整体回滚；重复或不存在 ID 返回 400。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "required": ["id", "sort_order", "version"],
+                  "properties": {
+                    "id": { "type": "integer", "minimum": 1 },
+                    "version": { "type": "integer", "minimum": 1 },
+                    "sort_order": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/games/{id}": {
+      "put": {
+        "summary": "更新游戏",
+        "description": "部分更新，version 必填，另至少一个修改字段；冲突返回 409；启停只提交 status/version。停用不下架历史文章。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["version"],
+                "properties": {
+                  "version": { "type": "integer", "minimum": 1 },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 50 },
+                  "description": { "type": "string", "maxLength": 500 },
+                  "cover": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 500
+                  },
+                  "status": { "type": "integer", "enum": [0, 1] },
+                  "sort_order": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除游戏",
+        "description": "version 必填，冲突 409，不存在 404，有任意状态文章关联返回 400。删除与封面清理任务登记为同一事务。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["version"],
+                "properties": { "version": { "type": "integer", "minimum": 1 } }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts": {
+      "get": {
+        "summary": "公开文章分页列表；标题和标签字面检索，支持游戏与分类组合筛选",
+        "description": "data.list 每项包含 has_video 布尔值：存在关联的 video 媒体时为 true，仅图片或无媒体时为 false。用于封面视频标志；不返回正文、媒体列表或视频 URL。",
+        "parameters": [
+          {"name":"keyword","in":"query","schema":{"type":"string","maxLength":200},"description":"标题或标签的字面子串，首尾空白去除，%与_不作为通配符"},
+          {"name":"game_id","in":"query","schema":{"type":"integer","minimum":1}},
+          {"name":"category","in":"query","schema":{"type":"string","enum":["BOSS攻略","新手入门","剧情解析","装备评测","全收集","Build分享"]}},
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "post": {
+        "summary": "创建草稿；request_id 可用于响应丢失后的幂等重试",
+        "description": "新客户端提供16~64位request_id。同账号同编号同内容返回同一id，换内容或文章已删除返回409。响应data含id、content_version、status、replayed。标签最多20个，每个去首尾空白后1~30字。",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["title","content","game_id","category"],
+          "properties": {
+            "title": {"type":"string","minLength":1,"maxLength":200}, "content":{"type":"string","minLength":1},
+            "game_id":{"type":"integer","minimum":1}, "category":{"type":"string"},
+            "request_id":{"type":"string","pattern":"^[A-Za-z0-9-]{16,64}$"},
+            "tags":{"type":"array","maxItems":20,"items":{"type":"string","minLength":1,"maxLength":30}},
+            "cover":{"type":["string","null"]}, "video":{"type":["string","null"]}, "guide_info":{"$ref":"#/components/schemas/GuideInfo"}
+          }
+        } } } },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}": {
+      "get": {
+        "summary": "公开文章详情",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "put": {
+        "summary": "按版本更新本人文章",
+        "description": "必须提供编辑详情中的content_version；持锁校验，不匹配返回409且不修改文章。已发布文章保存到独立修订，原公开正文、标签、媒体和游戏归属不变；首次修订自动进入pending，通过审核后原子替换，驳回只修改修订状态。保存成功返回新content_version、status，修订额外含is_revision=true/public_status=published。status请求字段仍不直接控制发布。",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type":"object", "required":["content_version"],
+          "properties":{"content_version":{"type":"integer","minimum":1},"guide_info":{"$ref":"#/components/schemas/GuideInfo"}}
+        } } } },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除本人文章",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}/status": {
+      "get": {
+        "summary": "当前用户互动状态",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}/view": {
+      "post": {
+        "summary": "上报一次经服务端去重的有效阅读",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/manage/{id}": {
+      "get": {
+        "summary": "受保护的文章编辑详情",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}/submit": {
+      "post": {
+        "summary": "提交文章审核",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/my/list": {
+      "get": {
+        "summary": "本人文章分页列表",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}/like": {
+      "post": {
+        "summary": "点赞切换",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}/favorite": {
+      "post": {
+        "summary": "收藏切换",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/follows/{id}": {
+      "post": {
+        "summary": "关注切换",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+"/api/posts/{postId}/comments": {
+      "get": {
+        "summary": "评论按层级分页及有限回复预览",
+        "description": "不传 parent_id 时分页顶层评论，每条最多预览三条直接回复。传 parent_id 时只分页该评论的直接回复。reply_count 为直接回复总数。focus_id 用于通知定位，最多补入64层祖先路径，并重新计算目标所在顶层页码，客户端应采用响应中的 page；普通翻页不传 focus_id。focus_path 表示预览包含额外定位节点，不代表完整分页。",
+        "parameters": [
+          { "name": "parent_id", "in": "query", "description": "父评论编号；只分页直接回复", "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "focus_id", "in": "query", "description": "通知定位评论编号；仅顶层请求补入有界祖先链", "schema": { "type": "integer", "minimum": 1 } },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      },
+      "post": {
+        "summary": "发表评论",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/comments/{commentId}/reply": {
+      "post": {
+        "summary": "回复评论",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommentId"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/comments/{commentId}": {
+      "delete": {
+        "summary": "删除本人评论",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommentId"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/favorites": {
+      "get": {
+        "summary": "当前用户收藏分页",
+        "description": "仅返回当前登录用户收藏的已发布文章摘要，包含game_name、nickname、tags、has_video布尔值，不含正文、媒体列表或视频URL。按收藏时间倒序，同时间按收藏id倒序。total与游戏筛选口径一致。",
+        "parameters": [
+          { "name": "game_id", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 } }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/following-feed": {
+      "get": {
+        "summary": "当前用户关注作者的最新攻略",
+        "description": "身份仅取鉴权用户。仅返回当前关注作者的已发布文章摘要，包含has_video布尔值、不含媒体URL；按首次发布时间倒序、文章id倒序；取消关注后不再返回该作者文章。不是推荐或未读通知，不限制关注前的历史文章。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "game_id", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 } }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Success" },
+          "400": { "description": "游戏编号无效" },
+          "401": { "description": "未登录或登录失效" }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "summary": "当前用户通知分页",
+        "description": "支持page/pageSize、unread=0或1、type=like/comment/reply/follow/audit/system。data含list,total,page,pageSize,unread,cutoff_id；列表额外含context_title、comment_id、target_available。北京时间业务日期，返回时间由客户端格式化。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/notifications/read-all": {
+      "put": {
+        "summary": "全部通知已读",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "cutoff_id": { "type": "integer", "minimum": 0, "description": "查询响应的截止编号；仅更新不超过该编号的通知。旧客户端省略则在请求处理时取截止编号。" }, "type": { "type": "string", "enum": ["like","comment","reply","follow","audit","system"] } } } } } },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/notifications/summary": {
+      "get": { "summary": "当前用户未读概况", "security": [{"bearerAuth":[]}], "responses": {"200":{"description":"data:{unread,cutoff_id}，仅限当前账号"},"401":{"description":"未登录"}} }
+    },
+    "/api/notifications/{id}/target": {
+      "get": { "summary": "检查通知目标并定位关联评论", "security": [{"bearerAuth":[]}], "parameters":[{"$ref":"#/components/parameters/Id"}], "responses":{"200":{"description":"data:{path,message}，不可访问时path为null；此查询不标记已读"},"404":{"description":"通知不存在或不属于当前账号"}} }
+    },
+    "/api/notifications/{id}/read": {
+      "put": {
+        "summary": "单条通知已读",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/followers": {
+      "get": {
+        "summary": "粉丝分页",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/reports": {
+      "post": {
+        "summary": "提交举报",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/following": {
+      "get": {
+        "summary": "关注分页",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/admin/posts/pending": {
+      "get": {
+        "summary": "分页待审队列，按提交时间及 ID 升序；历史未知提交时间为 null，按创建时间回退；不返回正文",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "data: { total,page,pageSize,list }，合并首次发布和已发布文章修订的待审队列；list 包含 id,title,user_id,game_id,category,status,content_version,submitted_at,created_at,username,game_name,is_revision，不含正文"
+          }
+        }
+      }
+    },
+    "/api/admin/posts/{id}/approve": {
+      "put": {
+        "summary": "按内容版本审核通过并发布",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["content_version"],
+                "properties": {
+                  "content_version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "从审核详情取得，禁止用过期列表代替"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功，标准响应信封"
+          },
+          "400": {
+            "description": "ID、content_version 或 reason 不合法"
+          },
+          "401": {
+            "description": "未登录"
+          },
+          "403": {
+            "description": "非管理员"
+          },
+          "404": {
+            "description": "文章不存在"
+          },
+          "409": {
+            "description": "版本或状态变化，必须重新审阅"
+          }
+        }
+      }
+    },
+    "/api/admin/posts/{id}/reject": {
+      "put": {
+        "summary": "按内容版本驳回",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["content_version", "reason"],
+                "properties": {
+                  "content_version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "从审核详情取得，禁止用过期列表代替"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功，标准响应信封"
+          },
+          "400": {
+            "description": "ID、content_version 或 reason 不合法"
+          },
+          "401": {
+            "description": "未登录"
+          },
+          "403": {
+            "description": "非管理员"
+          },
+          "404": {
+            "description": "文章不存在"
+          },
+          "409": {
+            "description": "版本或状态变化，必须重新审阅"
+          }
+        }
+      }
+    },
+    "/api/admin/applications": {
+      "get": {
+        "summary": "创作者申请列表（管理员）",
+        "description": "列表 id 为申请 ID，user_id 为用户 ID；包含 reason/status/submitted_at/reviewed_at/reviewer_username/reject_reason/legacy 及 username/nickname/avatar/role/user_status。历史缺失时间及审核人为 null。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["pending", "processed"],
+              "default": "pending"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1 }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Success" } }
+      }
+    },
+    "/api/admin/applications/{id}/approve": {
+      "put": {
+        "summary": "通过指定一轮创作者申请（管理员）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "申请人的用户 ID",
+            "schema": { "type": "integer", "minimum": 1 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["application_id"],
+                "properties": {
+                  "application_id": { "type": "integer", "minimum": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Success" },
+          "400": { "description": "参数不合法或缺少申请编号" },
+          "404": { "description": "用户不存在" },
+          "409": { "description": "申请状态变化或申请人已封禁" }
+        }
+      }
+    },
+    "/api/admin/applications/{id}/reject": {
+      "put": {
+        "summary": "驳回指定一轮创作者申请（管理员）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "申请人的用户 ID",
+            "schema": { "type": "integer", "minimum": 1 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["application_id", "reason"],
+                "properties": {
+                  "application_id": { "type": "integer", "minimum": 1 },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "trim 后不能为空"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Success" },
+          "400": { "description": "申请编号或驳回原因不合法" },
+          "404": { "description": "用户不存在" },
+          "409": { "description": "申请状态已变化" }
+        }
+      }
+    },
+    "/api/admin/reports": {
+      "$ref": "#/components/pathItems/AdminGet"
+    },
+    "/api/admin/reports/{id}/resolve": {
+      "$ref": "#/components/pathItems/AdminPutId"
+    },
+    "/api/admin/users": {
+      "$ref": "#/components/pathItems/AdminGet"
+    },
+    "/api/admin/users/{id}/ban": {
+      "put": {
+        "summary": "明确设置用户状态，封禁作废旧token",
+        "security": [{"bearerAuth":[]}], "parameters": [{"$ref":"#/components/parameters/Id"}],
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","required":["status","version","reason"],"properties":{"status":{"type":"integer","enum":[0,1]},"version":{"type":"integer","minimum":1},"reason":{"type":"string","minLength":1,"maxLength":300}}}}}},
+        "responses":{"200":{"description":"data: {status,version}"},"409":{"description":"版本过期，刷新后重新确认"},"400":{"description":"参数非法或管理员受保护"}}
+      }
+    },
+    "/api/admin/users/{id}/deletion-preview": {
+      "get": {"summary":"删除影响预览","security":[{"bearerAuth":[]}],"parameters":[{"$ref":"#/components/parameters/Id"}],"responses":{"200":{"description":"data: {username,version,fingerprint,post_count,removed_comment_count,retained_comment_count,asset_count,announcement_count}"},"404":{"description":"用户不存在"}}}
+    },
+    "/api/admin/users/{id}": {
+      "delete": {"summary":"永久删除账号，保留其他文章上的评论占位和回复","security":[{"bearerAuth":[]}],"parameters":[{"$ref":"#/components/parameters/Id"}],
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["username","fingerprint","reason"],"properties":{"username":{"type":"string"},"fingerprint":{"type":"string"},"reason":{"type":"string","minLength":1,"maxLength":300}}}}}},
+        "responses":{"200":{"description":"data: {deleted,username,post_count,comment_count,...预览影响}；文件异步清理"},"409":{"description":"确认或影响范围变化"},"400":{"description":"管理员、公告作者受保护或参数非法"}}
+      }
+    },
+    "/api/admin/announcements": {
+      "get": {
+        "summary": "分页查询未删除公告",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["draft", "published", "archived"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnnouncementPageSuccess"
+          }
+        }
+      },
+      "post": {
+        "summary": "创建公告草稿",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnouncementInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/announcements/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "put": {
+        "summary": "乐观锁更新公告草稿",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnouncementUpdateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "软删除未发布草稿",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/announcements/{id}/clone": {
+      "post": {
+        "summary": "复制公告为新草稿",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/announcements/{id}/publish": {
+      "put": {
+        "summary": "发布草稿并原子归档当前公告",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/announcements/{id}/archive": {
+      "put": {
+        "summary": "归档当前生效公告",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/admin/stats": {
+      "$ref": "#/components/pathItems/AdminGet"
+    },
+    "/api/admin/games": {
+      "$ref": "#/components/pathItems/AdminGet"
+    },
+    "/api/admin/logs": {
+      "get": {
+        "summary": "查询成功提交的管理操作日志（仅管理员）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+          { "name": "admin_id", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "action", "in": "query", "schema": { "type": "string" }, "description": "操作类型，包括 ban_user 与 unban_user；未知值返回400" },
+          { "name": "keyword", "in": "query", "schema": { "type": "string", "maxLength": 200 }, "description": "操作详情的字面子串" },
+          { "name": "start", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "北京时间起始日期" },
+          { "name": "end", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "包含结束日期整天，不可早于start" },
+          { "name": "request_id", "in": "query", "schema": { "type": "string", "maxLength": 128 } },
+          { "name": "target_type", "in": "query", "schema": { "type": "string", "enum": ["post", "user", "report", "announcement", "notification", "game"] } },
+          { "name": "target_id", "in": "query", "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": {
+          "200": { "description": "data: {list,total,page,pageSize}。按created_at、id倒序。记录包含操作人快照、action、method、path、target_type、target_id、detail、ip、status、created_at，以及可空request_id、event_key、metadata。历史记录不补写新字段。" },
+          "400": { "description": "筛选参数无效" },
+          "401": { "description": "未登录" },
+          "403": { "description": "无管理员权限" }
+        }
+      }
+    },
+    "/api/admin/notifications": {
+      "get": {
+        "summary": "系统通知发送批次（仅管理员，按批次倒序）",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 } }
+        ],
+        "responses": { "200": { "description": "data: {list:[{id,admin_id,admin_username,request_id,scope,target_user_id,target_label,content,recipient_count,created_at}],total,page,pageSize}。人数为写入人数，不是已读人数。" } }
+      },
+      "post": {
+        "summary": "发送系统通知（管理员；同一管理员每分钟最多10个新批次）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["scope", "content", "request_id"],
+          "properties": {
+            "scope": { "type": "string", "enum": ["user", "all"] },
+            "target_user_id": { "type": "integer", "nullable": true, "minimum": 1, "description": "user时必须指定启用用户；all时必须省略或为null" },
+            "content": { "type": "string", "minLength": 1, "maxLength": 300, "description": "trim后按Unicode码点计数，纯文本" },
+            "request_id": { "type": "string", "pattern": "^[a-zA-Z0-9-]{16,64}$", "description": "同一逻辑发送必须沿用编号。相同编号不同内容返回409。" }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "data: {id:批次编号,count:实际写入人数,replayed:是否幂等重放}" },
+          "400": { "description": "参数非法" }, "401": { "description": "未登录" }, "403": { "description": "非管理员" },
+          "404": { "description": "用户不存在" }, "409": { "description": "封禁用户、无接收人或编号冲突" }, "429": { "description": "发送限频" }
+        }
+      }
+    },
+    "/api/admin/notifications/preview": {
+      "post": {
+        "summary": "只读接收范围预览（管理员；人数不预留，以实际写入为准）",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "required": ["scope"], "properties": {
+            "scope": { "type": "string", "enum": ["user", "all"] },
+            "target_user_id": { "type": "integer", "nullable": true, "minimum": 1 }
+          }
+        } } } },
+        "responses": { "200": { "description": "data: {count,user:null|{id,username,nickname,status}}" }, "400": { "description": "参数非法" }, "404": { "description": "用户不存在" }, "409": { "description": "用户被封禁" } }
+      }
+    },
+    "/api/announcements/latest": {
+      "get": {
+        "summary": "当前全局公告（携带有效登录态时返回 is_read）",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnnouncementSuccess"
+          }
+        }
+      }
+    },
+    "/api/announcements/{id}/read": {
+      "post": {
+        "summary": "记录登录用户已读公告版本",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["version"],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/creator/stats": {
+      "get": {
+        "summary": "创作者统计 v2（当前快照与周期事件分离）",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "game_id",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "post_id",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "rank_by",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pv",
+                "uv",
+                "likes_added",
+                "favorites_added",
+                "comments_added",
+                "engagement_rate"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CreatorStatsSuccess"
+          }
+        }
+      }
+    },
+    "/api/media/upload/image": {
+      "post": {
+        "summary": "上传图片并登记临时资产",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/media/upload/video/status": {
+      "post": {
+        "summary": "视频分片状态",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/media/upload/video/chunk": {
+      "post": {
+        "summary": "上传视频分片",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/media/upload/video/merge": {
+      "post": {
+        "summary": "校验、合并并转码视频",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/media/assets/{assetId}": {
+      "delete": {
+        "summary": "撤销未绑定临时上传",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AssetId"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Success"
+          }
+        }
+      }
+    },
+    "/api/media/{id}": {
+      "delete": {
+        "summary": "旧媒体删除入口（已停用写入，文章媒体请通过带 content_version 的文章编辑移除）",
+        "deprecated": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": ["creator", "admin"],
+        "responses": {
+          "409": {
+            "description": "媒体已被文章引用，必须通过文章编辑保存，当前文章及资产均不发生修改"
+          },
+          "403": {
+            "description": "无权操作他人文章的媒体"
+          },
+          "404": {
+            "description": "媒体不存在"
+          }
+        }
+      }
+    },
+    "/api/admin/posts/{id}/review": {
+      "get": {
+        "summary": "管理员完整审核详情及最近 20 条记录；一致性读取，不计浏览",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "data 为当前待审/驳回修订（存在时）或文章全部字段、content_version、submitted_at、game_name、tags、media、reviews；修订额外含is_revision=true/public_status=published，公开详情始终不返回修订内容。reviews 含 id/content_version/reviewer_username/decision/reason/created_at"
+          },
+          "403": {
+            "description": "非管理员"
+          },
+          "404": {
+            "description": "文章不存在"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "parameters": {
+      "Id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "PostId": {
+        "name": "postId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "CommentId": {
+        "name": "commentId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "AssetId": {
+        "name": "assetId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "PageSize": {
+        "name": "pageSize",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    },
+    "pathItems": {
+      "AdminGet": {
+        "get": {
+          "summary": "管理员查询",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        }
+      },
+      "AdminPost": {
+        "post": {
+          "summary": "管理员创建操作",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        }
+      },
+      "AdminPutId": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "put": {
+          "summary": "管理员更新操作",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        }
+      },
+      "AdminDeleteId": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "delete": {
+          "summary": "管理员删除操作",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        }
+      },
+      "AdminGetPost": {
+        "get": {
+          "summary": "管理员查询",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        },
+        "post": {
+          "summary": "管理员创建操作",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        }
+      },
+      "AdminPutDeleteId": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "put": {
+          "summary": "管理员更新操作",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        },
+        "delete": {
+          "summary": "管理员删除操作",
+          "security": [
+            {
+              "bearerAuth": []
+            }
+          ],
+          "x-roles": ["admin"],
+          "responses": {
+            "200": {
+              "$ref": "#/components/responses/Success"
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Success": {
+        "description": "统一成功信封",
+        "headers": {
+          "X-Request-Id": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Envelope"
+            }
+          }
+        }
+      },
+      "CreatorStatsSuccess": {
+        "description": "创作者统计成功响应",
+        "headers": {
+          "X-Request-Id": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreatorStatsEnvelope"
+            }
+          }
+        }
+      },
+      "AnnouncementSuccess": {
+        "description": "当前公告或 null",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AnnouncementEnvelope"
+            }
+          }
+        }
+      },
+      "AnnouncementPageSuccess": {
+        "description": "公告分页",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AnnouncementPageEnvelope"
+            }
+          }
+        }
+      },
+      "Error": {
+        "description": "统一错误信封",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Envelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "GuideInfo": {
+        "type":["object","null"], "additionalProperties":false,
+        "description":"选填攻略概况，游戏补丁版本与content_version无关。缺失字段使用空文本、none和空时间点；空概况归一化为null。PUT省略则保留，null则清除。时间点最多30个，需主视频，秒数严格递增；播放端按实际视频时长禁用越界点。",
+        "properties": {
+          "summary":{"type":"string","maxLength":400},
+          "game_version":{"type":"string","maxLength":40},
+          "prerequisites":{"type":"string","maxLength":600},
+          "spoiler":{"type":"string","enum":["none","minor","major"]},
+          "video_chapters":{"type":"array","maxItems":30,"items":{"type":"object","required":["seconds","title"],"properties":{"seconds":{"type":"integer","minimum":0,"maximum":86400},"title":{"type":"string","minLength":1,"maxLength":60}}}}
+        }
+      },
+      "Envelope": {
+        "type": "object",
+        "required": ["code", "message", "data"],
+        "properties": {
+          "code": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {}
+        }
+      },
+      "AnnouncementInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "content"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "description": "trim 后 UTF-8 最多 64000 字节"
+          }
+        }
+      },
+      "AnnouncementUpdateInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AnnouncementInput"
+          },
+          {
+            "type": "object",
+            "required": ["version"],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        ]
+      },
+      "Announcement": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "content",
+          "author_id",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "author_id": {
+            "type": "integer"
+          },
+          "author_username": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "published", "archived"]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source_id": {
+            "type": ["integer", "null"]
+          },
+          "is_read": {
+            "type": "integer",
+            "enum": [0, 1]
+          },
+          "published_at": {
+            "type": ["string", "null"]
+          },
+          "archived_at": {
+            "type": ["string", "null"]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
+      "AnnouncementEnvelope": {
+        "type": "object",
+        "required": ["code", "message", "data"],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "const": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Announcement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AnnouncementPageEnvelope": {
+        "type": "object",
+        "required": ["code", "message", "data"],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "const": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "required": ["total", "page", "pageSize", "list"],
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "page": {
+                "type": "integer"
+              },
+              "pageSize": {
+                "type": "integer"
+              },
+              "list": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Announcement"
+                }
+              }
+            }
+          }
+        }
+      },
+      "MetricComparison": {
+        "type": "object",
+        "required": ["current", "previous", "change_percent"],
+        "properties": {
+          "current": {
+            "type": "number"
+          },
+          "previous": {
+            "type": "number"
+          },
+          "change_percent": {
+            "type": ["number", "null"]
+          }
+        }
+      },
+      "CreatorStatsPeriod": {
+        "type": "object",
+        "required": [
+          "pv",
+          "uv",
+          "likes_added",
+          "likes_removed",
+          "likes_net",
+          "favorites_added",
+          "favorites_removed",
+          "favorites_net",
+          "comments_added",
+          "comments_removed",
+          "comments_net",
+          "followers_added",
+          "followers_removed",
+          "followers_net",
+          "engaged_users",
+          "engagement_rate"
+        ],
+        "properties": {
+          "pv": {
+            "type": "integer"
+          },
+          "uv": {
+            "type": "integer"
+          },
+          "likes_added": {
+            "type": "integer"
+          },
+          "likes_removed": {
+            "type": "integer"
+          },
+          "likes_net": {
+            "type": "integer"
+          },
+          "favorites_added": {
+            "type": "integer"
+          },
+          "favorites_removed": {
+            "type": "integer"
+          },
+          "favorites_net": {
+            "type": "integer"
+          },
+          "comments_added": {
+            "type": "integer"
+          },
+          "comments_removed": {
+            "type": "integer"
+          },
+          "comments_net": {
+            "type": "integer"
+          },
+          "followers_added": {
+            "type": "integer"
+          },
+          "followers_removed": {
+            "type": "integer"
+          },
+          "followers_net": {
+            "type": "integer"
+          },
+          "engaged_users": {
+            "type": "integer"
+          },
+          "engagement_rate": {
+            "type": "number"
+          }
+        }
+      },
+      "CreatorStatsTrendItem": {
+        "type": "object",
+        "required": [
+          "date",
+          "pv",
+          "uv",
+          "likes_added",
+          "likes_removed",
+          "likes_net",
+          "favorites_added",
+          "favorites_removed",
+          "favorites_net",
+          "comments_added",
+          "comments_removed",
+          "comments_net",
+          "followers_added",
+          "followers_removed",
+          "followers_net"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "pv": {
+            "type": "integer"
+          },
+          "uv": {
+            "type": "integer"
+          },
+          "likes_added": {
+            "type": "integer"
+          },
+          "likes_removed": {
+            "type": "integer"
+          },
+          "likes_net": {
+            "type": "integer"
+          },
+          "favorites_added": {
+            "type": "integer"
+          },
+          "favorites_removed": {
+            "type": "integer"
+          },
+          "favorites_net": {
+            "type": "integer"
+          },
+          "comments_added": {
+            "type": "integer"
+          },
+          "comments_removed": {
+            "type": "integer"
+          },
+          "comments_net": {
+            "type": "integer"
+          },
+          "followers_added": {
+            "type": "integer"
+          },
+          "followers_removed": {
+            "type": "integer"
+          },
+          "followers_net": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreatorStatsEnvelope": {
+        "type": "object",
+        "required": ["code", "message", "data"],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "const": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "meta",
+              "current",
+              "period",
+              "comparison",
+              "trend",
+              "top_posts",
+              "category_performance"
+            ],
+            "properties": {
+              "meta": {
+                "type": "object",
+                "required": [
+                  "from",
+                  "to",
+                  "timezone",
+                  "generated_at",
+                  "data_since",
+                  "has_complete_history",
+                  "definitions_version",
+                  "filters"
+                ],
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "const": "Asia/Shanghai"
+                  },
+                  "generated_at": {
+                    "type": "string"
+                  },
+                  "data_since": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "has_complete_history": {
+                    "type": "boolean"
+                  },
+                  "definitions_version": {
+                    "type": "string",
+                    "const": "2.0"
+                  },
+                  "filters": {
+                    "type": "object"
+                  }
+                }
+              },
+              "current": {
+                "type": "object",
+                "required": [
+                  "published_posts",
+                  "legacy_lifetime_views",
+                  "active_likes",
+                  "active_favorites",
+                  "active_comments",
+                  "followers"
+                ],
+                "properties": {
+                  "published_posts": {
+                    "type": "integer"
+                  },
+                  "legacy_lifetime_views": {
+                    "type": "integer"
+                  },
+                  "active_likes": {
+                    "type": "integer"
+                  },
+                  "active_favorites": {
+                    "type": "integer"
+                  },
+                  "active_comments": {
+                    "type": "integer"
+                  },
+                  "followers": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "period": {
+                "$ref": "#/components/schemas/CreatorStatsPeriod"
+              },
+              "comparison": {
+                "type": "object",
+                "required": [
+                  "pv",
+                  "uv",
+                  "likes_net",
+                  "favorites_net",
+                  "comments_net",
+                  "followers_net",
+                  "engagement_rate"
+                ],
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/MetricComparison"
+                }
+              },
+              "trend": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CreatorStatsTrendItem"
+                }
+              },
+              "top_posts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "title",
+                    "pv",
+                    "uv",
+                    "likes_added",
+                    "favorites_added",
+                    "comments_added",
+                    "engaged_users",
+                    "engagement_rate"
+                  ]
+                }
+              },
+              "category_performance": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "category",
+                    "post_count",
+                    "pv",
+                    "uv",
+                    "average_uv",
+                    "likes_added",
+                    "favorites_added",
+                    "comments_added",
+                    "engagement_rate"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

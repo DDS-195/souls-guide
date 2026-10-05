@@ -9,7 +9,13 @@ async function findByUsername(username) {
 }
 
 async function findById(id) {
-  const [rows] = await pool.execute('SELECT id, username, nickname, avatar, bio, gender, birthday, role, apply_status, status, created_at FROM users WHERE id = ?', [id])
+  // DATE 没有时区；以纯日期字符串返回，避免 JS Date 序列化成 UTC 后退到前一天。
+  const [rows] = await pool.execute("SELECT id, username, nickname, avatar, bio, gender, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, role, apply_status, status, created_at FROM users WHERE id = ?", [id])
+  return rows[0]
+}
+
+async function findCredentialsById(id) {
+  const [rows] = await pool.execute('SELECT id, password, role, token_version FROM users WHERE id = ?', [id])
   return rows[0]
 }
 
@@ -18,8 +24,12 @@ async function create({ username, password }) {
   return result.insertId
 }
 
-async function updateApplyStatus(id, status, reason = '') {
-  await pool.execute('UPDATE users SET apply_status=?, apply_reason=? WHERE id=?', [status, reason, id])
+async function changePassword(id, password) {
+  const [result] = await pool.execute(
+    'UPDATE users SET password=?, token_version=token_version+1 WHERE id=?',
+    [password, id]
+  )
+  return result.affectedRows
 }
 
 async function updateProfile(id, { nickname, bio, gender, birthday, avatar }) {
@@ -101,4 +111,4 @@ async function getProfile(id, viewerId) {
   return profile
 }
 
-module.exports = { findByUsername, findById, create, updateApplyStatus, updateProfile, uploadAvatar, getProfile }
+module.exports = { findByUsername, findById, findCredentialsById, create, changePassword, updateProfile, uploadAvatar, getProfile }

@@ -1,73 +1,85 @@
 const pool = require('../config/db')
-const mediaService = require('./mediaService')
+const withTransaction = require('../utils/withTransaction')
 
-// 待审核文章
+// 待审列表只取队列字段，正文与媒体按需加载。
 async function getPendingPosts(page = 1, pageSize = 10) {
-  const [rows] = await pool.execute(
-    'SELECT p.*, u.username FROM posts p JOIN users u ON p.user_id = u.id WHERE p.status = ? ORDER BY p.created_at ASC LIMIT ? OFFSET ?',
-    ['pending', String(pageSize), String((page - 1) * pageSize)]
+  return withTransaction(async db => {
+  const from = `FROM posts p JOIN users u ON p.user_id=u.id
+    LEFT JOIN post_revisions r ON r.post_id=p.id AND p.status='published' AND r.status='pending'
+    JOIN games g ON g.id=COALESCE(JSON_EXTRACT(r.payload,'$.game_id')+0,p.game_id)
+    WHERE p.status='pending' OR r.post_id IS NOT NULL`
+  const [rows] = await db.execute(
+    `SELECT p.id, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(r.payload,'$.title')),p.title) AS title,
+      p.user_id, g.id AS game_id, COALESCE(JSON_UNQUOTE(JSON_EXTRACT(r.payload,'$.category')),p.category) AS category,
+      'pending' AS status,p.content_version, COALESCE(r.submitted_at,p.submitted_at) AS submitted_at,
+      p.created_at,u.username,g.name AS game_name, r.post_id IS NOT NULL AS is_revision
+     ${from} ORDER BY COALESCE(r.submitted_at,p.submitted_at,p.created_at), p.id LIMIT ? OFFSET ?`,
+    [String(pageSize), String((page - 1) * pageSize)]
   )
-  const [[{ total }]] = await pool.execute('SELECT COUNT(*) as total FROM posts WHERE status=?', ['pending'])
+  const [[{ total }]] = await db.execute(`SELECT COUNT(*) AS total ${from}`)
   return { total, page, pageSize, list: rows }
+  })
 }
 
-// 审核通过：先查后改（2026-08-13 修复：不存在/非待审状态不再静默 200）
-// 返回：null=文章不存在；'not_pending'=非待审状态（仅 pending 可审核，防 draft 绕过审核直发/已发布被打回）
-async function approvePost(id) {
-  const [[post]] = await pool.execute('SELECT user_id, title, status FROM posts WHERE id=?', [id])
+async function reviewSnapshot(db, id) {
+  const [[post]] = await db.execute(
+    'SELECT p.*, u.username, g.name AS game_name FROM posts p JOIN users u ON u.id=p.user_id JOIN games g ON g.id=p.game_id WHERE p.id=?', [id])
   if (!post) return null
-  if (post.status !== 'pending') return 'not_pending'
-  await pool.execute("UPDATE posts SET status='published' WHERE id=?", [id])
-  await pool.execute('INSERT INTO notifications (receiver_id, sender_id, type, target_type, target_id, content) VALUES (?, NULL, ?, ?, ?, ?)',
-    [post.user_id, 'audit', 'post', id, '你的文章审核已通过'])
-  return { user_id: post.user_id }
+  const [tags] = await db.execute('SELECT t.name FROM tags t JOIN post_tags pt ON pt.tag_id=t.id WHERE pt.post_id=? ORDER BY t.id', [id])
+  const [media] = await db.execute('SELECT * FROM media WHERE post_id=? ORDER BY sort_order,id', [id])
+  let result = { ...post, guide_info: require('../utils/guideInfo').decodeGuideInfo(post.guide_info), tags: tags.map(t => t.name), media }
+  if (post.status === 'published') {
+    result = await require('./postRevisionService').decorateOn(db, result)
+    if (result.is_revision) {
+      const [[game]] = await db.execute('SELECT name FROM games WHERE id=?', [result.game_id])
+      result.game_name = game?.name
+    }
+  }
+  return result
 }
 
-async function rejectPost(id, reason) {
-  const [[post]] = await pool.execute('SELECT user_id, status FROM posts WHERE id=?', [id])
-  if (!post) return null
-  if (post.status !== 'pending') return 'not_pending'
-  await pool.execute("UPDATE posts SET status='rejected', reject_reason=? WHERE id=?", [reason, id])
-  await pool.execute('INSERT INTO notifications (receiver_id, sender_id, type, target_type, target_id, content) VALUES (?, NULL, ?, ?, ?, ?)',
-    [post.user_id, 'audit', 'post', id, `你的文章审核被驳回：${reason}`])
-  return { user_id: post.user_id }
+async function getReviewDetail(id) {
+  return withTransaction(async db => {
+    // 与内容编辑使用同一行锁，保证正文、标签、媒体属于同一版本。
+    const [[locked]] = await db.execute('SELECT id FROM posts WHERE id=? FOR UPDATE', [id])
+    if (!locked) return null
+    const post = await reviewSnapshot(db, id)
+    const [reviews] = await db.execute(
+      'SELECT id, content_version, reviewer_username, decision, reason, created_at FROM post_reviews WHERE post_id=? ORDER BY id DESC LIMIT 20', [id])
+    return { ...post, reviews }
+  })
 }
 
-// 创作者申请
-async function getApplications(page = 1, pageSize = 10) {
-  // 显式列（不返回 password 哈希）
-  const [rows] = await pool.execute(
-    'SELECT id, username, avatar, role, apply_status, apply_reason, bio, nickname, gender, birthday, status, created_at, updated_at FROM users WHERE apply_status = ? ORDER BY updated_at ASC LIMIT ? OFFSET ?',
-    ['pending', String(pageSize), String((page - 1) * pageSize)]
-  )
-  const [[{ total }]] = await pool.execute('SELECT COUNT(*) as total FROM users WHERE apply_status=?', ['pending'])
-  return { total, page, pageSize, list: rows }
+async function decidePost(id, version, actor, decision, reason = null) {
+  return withTransaction(async db => {
+    const [[post]] = await db.execute('SELECT * FROM posts WHERE id=? FOR UPDATE', [id])
+    if (!post) return null
+    const revisions = require('./postRevisionService')
+    const revision = post.status === 'published' ? await revisions.getOn(db, id) : null
+    if ((revision ? revision.status : post.status) !== 'pending' || post.content_version !== version) return 'conflict'
+    const snapshot = await reviewSnapshot(db, id)
+    await db.execute(
+      `INSERT INTO post_reviews (post_id, content_version, reviewer_id, reviewer_username, decision, reason, snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, version, actor.id, actor.username, decision, reason, JSON.stringify(snapshot)]
+    )
+    if (revision) {
+      if (decision === 'published') await revisions.applyOn(db, post, revision)
+      else await db.execute("UPDATE post_revisions SET status='rejected',reject_reason=? WHERE post_id=?", [reason,id])
+    } else await db.execute(
+      `UPDATE posts SET status=?, reject_reason=?,
+       published_at=CASE WHEN ?='published' THEN COALESCE(published_at,NOW()) ELSE published_at END WHERE id=?`,
+      [decision, reason, decision, id]
+    )
+    await require('./notificationService').emit(db, post.user_id, null, 'audit', 'post', id,
+      decision === 'published' ? (revision ? '你的文章修订审核已通过' : '你的文章审核已通过') :
+        `${revision ? '你的文章修订被驳回，原文章仍公开' : '你的文章审核被驳回'}：${reason}`)
+    await require('../utils/auditContext').record(db, { content_version: version, decision, is_revision: !!revision }, { event_key: 'post-review:' + id + ':' + version })
+    return { user_id: post.user_id }
+  })
 }
-
-// 通过创作者申请：先查后改（2026-08-13 修复：不存在 id 不再因通知外键 500；admin 不再可被降级）
-// 返回：null=用户不存在；'not_user'=非普通用户（已是创作者/管理员，防 admin 被降级）；'not_pending'=不在待审状态
-async function approveApplication(id) {
-  const [[user]] = await pool.execute("SELECT id, role, apply_status FROM users WHERE id=?", [id])
-  if (!user) return null
-  if (user.role !== 'user') return 'not_user'
-  if (user.apply_status !== 'pending') return 'not_pending'
-  await pool.execute("UPDATE users SET role='creator', apply_status='approved' WHERE id=?", [id])
-  await pool.execute('INSERT INTO notifications (receiver_id, sender_id, type, target_type, target_id, content) VALUES (?, NULL, ?, ?, ?, ?)',
-    [id, 'audit', 'creatorship', id, '你的创作者申请已通过'])
-  return { user_id: id }
-}
-
-// 驳回创作者申请：先查后改（2026-08-13 修复同上）
-async function rejectApplication(id) {
-  const [[user]] = await pool.execute("SELECT id, role, apply_status FROM users WHERE id=?", [id])
-  if (!user) return null
-  if (user.role !== 'user') return 'not_user'
-  if (user.apply_status !== 'pending') return 'not_pending'
-  await pool.execute("UPDATE users SET apply_status='rejected' WHERE id=?", [id])
-  await pool.execute('INSERT INTO notifications (receiver_id, sender_id, type, target_type, target_id, content) VALUES (?, NULL, ?, ?, ?, ?)',
-    [id, 'audit', 'creatorship', id, '你的创作者申请被驳回'])
-  return { user_id: id }
-}
+async function approvePost(id, version, actor) { return decidePost(id, version, actor, 'published') }
+async function rejectPost(id, reason, version, actor) { return decidePost(id, version, actor, 'rejected', reason) }
 
 // 举报
 async function getReports(page = 1, pageSize = 10, status) {
@@ -82,107 +94,181 @@ async function getReports(page = 1, pageSize = 10, status) {
 }
 
 async function resolveReport(id, { status, handler_id, handler_note }) {
-  await pool.execute('UPDATE reports SET status=?, handler_id=?, handler_note=? WHERE id=?', [status, handler_id, handler_note, id])
+  await withTransaction(async db => {
+    await db.execute('UPDATE reports SET status=?, handler_id=?, handler_note=? WHERE id=?', [status, handler_id, handler_note, id])
+    await require('../utils/auditContext').record(db, { resolution: status })
+  })
 }
 
-// 用户管理
-async function getUserList({ page = 1, pageSize = 10, role, keyword }) {
-  let sql = 'SELECT id, username, avatar, role, apply_status, status, created_at FROM users WHERE 1=1'
+// 用户管理逻辑集中于 userAdminService，禁止旧的状态反转与直接清理路径。
+
+// 公告：draft 可修改；一旦发布即冻结。后续修订通过 clone 生成新草稿，避免改写用户已读过的发布版本。
+const ANNOUNCEMENT_FIELDS = `a.id, a.title, a.content, a.author_id, a.status, a.version, a.source_id,
+  a.published_at, a.archived_at, a.created_at, a.updated_at`
+
+async function writeAnnouncementEvent(db, announcement, action, fromStatus, toStatus, actor) {
+  const [event] = await db.execute(
+    `INSERT INTO announcement_events
+      (announcement_id, actor_id, actor_username, action, from_status, to_status, version, title_snapshot, content_snapshot)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [announcement.id, actor.id || null, actor.username || 'unknown', action, fromStatus, toStatus,
+      announcement.version, announcement.title, announcement.content]
+  )
+  await require('../utils/auditContext').record(db, { id: announcement.id, version: announcement.version, from_status: fromStatus, to_status: toStatus, announcement_event_id: event.insertId }, {
+    action: action + '_announcement', target_id: announcement.id, event_key: 'announcement-event:' + event.insertId,
+    detail: `公告 #${announcement.id}：${action}（${fromStatus || '无'} → ${toStatus || '已删除'}）`,
+  })
+}
+
+async function getAnnouncements({ page = 1, pageSize = 20, status } = {}) {
+  const where = ['a.deleted_at IS NULL']
   const params = []
-  if (role) { sql += ' AND role=?'; params.push(role) }
-  if (keyword) { sql += ' AND username LIKE ?'; params.push(`%${keyword}%`) }
-  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
-  params.push(String(pageSize), String((page - 1) * pageSize))
-  const [rows] = await pool.execute(sql, params)
-  const [[{ total }]] = await pool.execute('SELECT COUNT(*) as total FROM users WHERE 1=1' + (role ? ' AND role=?' : '') + (keyword ? ' AND username LIKE ?' : ''), [...(role ? [role] : []), ...(keyword ? [`%${keyword}%`] : [])])
+  if (status) { where.push('a.status=?'); params.push(status) }
+  const clause = `WHERE ${where.join(' AND ')}`
+  const [rows] = await pool.execute(
+    `SELECT ${ANNOUNCEMENT_FIELDS}, u.username AS author_username
+     FROM announcements a JOIN users u ON u.id=a.author_id
+     ${clause} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`,
+    [...params, String(pageSize), String((page - 1) * pageSize)]
+  )
+  const [[{ total }]] = await pool.execute(`SELECT COUNT(*) AS total FROM announcements a ${clause}`, params)
   return { total, page, pageSize, list: rows }
 }
 
-// 封禁/解封；返回：null=用户不存在；'admin'=目标为管理员（禁止封禁，防锁死系统）；0/1=新状态
-async function toggleBan(id) {
-  const [[user]] = await pool.execute('SELECT status, role FROM users WHERE id=?', [id])
-  if (!user) return null
-  if (user.role === 'admin') return 'admin'
-  const newStatus = user.status === 1 ? 0 : 1
-  await pool.execute('UPDATE users SET status=? WHERE id=?', [newStatus, id])
-  return newStatus
-}
-
-// 删除用户（硬删除，外键 CASCADE/SET NULL 自动级联）；返回：null=用户不存在；'admin'=目标为管理员；'has_announcements'=发布过公告（announcements.author_id RESTRICT）；成功={ deleted, username, post_count, comment_count }
-// 2026-08-13：删除前收集磁盘文件 URL（头像 + 全部文章的 cover + media），行删除后统一 unlink，不再残留孤儿文件
-async function deleteUser(id) {
-  const [[user]] = await pool.execute('SELECT username, role, avatar FROM users WHERE id=?', [id])
-  if (!user) return null
-  if (user.role === 'admin') return 'admin'
-  const [[{ ac }]] = await pool.execute('SELECT COUNT(*) as ac FROM announcements WHERE author_id=?', [id])
-  if (ac > 0) return 'has_announcements'
-  const [[{ post_count }]] = await pool.execute('SELECT COUNT(*) as post_count FROM posts WHERE user_id=?', [id])
-  const [[{ comment_count }]] = await pool.execute('SELECT COUNT(*) as comment_count FROM comments WHERE user_id=?', [id])
-  // 收集磁盘文件 URL（头像 + 文章封面 + 媒体库）
-  const diskUrls = [user.avatar]
-  const [posts] = await pool.execute('SELECT id, cover FROM posts WHERE user_id=?', [id])
-  for (const p of posts) {
-    if (p.cover) diskUrls.push(p.cover)
-  }
-  const postIds = posts.map(p => p.id)
-  if (postIds.length) {
-    const marks = postIds.map(() => '?').join(',')
-    const [medias] = await pool.execute(`SELECT url FROM media WHERE post_id IN (${marks})`, postIds)
-    for (const m of medias) diskUrls.push(m.url)
-  }
-  await pool.execute('DELETE FROM users WHERE id=?', [id])
-  // 行删除成功后清理磁盘（unlink 失败仅忽略，不影响业务）
-  await Promise.all(diskUrls.filter(Boolean).map(url => mediaService.unlinkUploads(url)))
-  return { deleted: 1, username: user.username, post_count, comment_count }
-}
-
-// 公告
-async function getAnnouncements() {
-  const [rows] = await pool.execute('SELECT * FROM announcements ORDER BY created_at DESC')
-  return rows
-}
-
-async function getLatestAnnouncement() {
-  const [rows] = await pool.execute("SELECT * FROM announcements WHERE status='published' ORDER BY created_at DESC LIMIT 1")
+async function getLatestAnnouncement(userId = null) {
+  const [rows] = await pool.execute(
+    `SELECT ${ANNOUNCEMENT_FIELDS}, CASE WHEN ar.user_id IS NULL THEN 0 ELSE 1 END AS is_read
+     FROM announcement_channels ac
+     JOIN announcements a ON a.id=ac.current_announcement_id
+     LEFT JOIN announcement_reads ar
+       ON ar.announcement_id=a.id AND ar.version=a.version AND ar.user_id=?
+     WHERE ac.channel='global' AND a.status='published' AND a.deleted_at IS NULL
+     LIMIT 1`,
+    [userId || 0]
+  )
   return rows[0] || null
 }
 
-async function createAnnouncement({ title, content, author_id }) {
-  const [result] = await pool.execute('INSERT INTO announcements (title, content, author_id) VALUES (?, ?, ?)', [title, content, author_id])
-  return result.insertId
+async function createAnnouncement({ title, content, author_id, actor }) {
+  return withTransaction(async (db) => {
+    const [result] = await db.execute(
+      'INSERT INTO announcements (title, content, author_id) VALUES (?, ?, ?)',
+      [title, content, author_id]
+    )
+    const announcement = { id: result.insertId, title, content, version: 1 }
+    await writeAnnouncementEvent(db, announcement, 'create', null, 'draft', actor)
+    return { id: result.insertId, version: 1 }
+  })
 }
 
-async function updateAnnouncement(id, { title, content }) {
-  await pool.execute('UPDATE announcements SET title=?, content=? WHERE id=?', [title, content, id])
+async function updateAnnouncement(id, { title, content, version, actor }) {
+  return withTransaction(async (db) => {
+    const [[current]] = await db.execute(
+      'SELECT id,title,content,status,version FROM announcements WHERE id=? AND deleted_at IS NULL FOR UPDATE', [id]
+    )
+    if (!current) return null
+    if (current.status !== 'draft') return 'not_editable'
+    if (current.version !== version) return 'conflict'
+    const next = { id: current.id, title, content, version: current.version + 1 }
+    await db.execute('UPDATE announcements SET title=?, content=?, version=version+1 WHERE id=?', [title, content, id])
+    await writeAnnouncementEvent(db, next, 'update', 'draft', 'draft', actor)
+    return { version: next.version }
+  })
 }
 
-async function publishAnnouncement(id) {
-  await pool.execute("UPDATE announcements SET status='archived' WHERE status='published'")
-  await pool.execute("UPDATE announcements SET status='published' WHERE id=?", [id])
+async function cloneAnnouncement(id, { author_id, actor }) {
+  return withTransaction(async (db) => {
+    const [[source]] = await db.execute(
+      'SELECT id,title,content,status FROM announcements WHERE id=? AND deleted_at IS NULL FOR UPDATE', [id]
+    )
+    if (!source) return null
+    const [result] = await db.execute(
+      'INSERT INTO announcements (title,content,author_id,source_id) VALUES (?,?,?,?)',
+      [source.title, source.content, author_id, source.id]
+    )
+    const announcement = { id: result.insertId, title: source.title, content: source.content, version: 1 }
+    await writeAnnouncementEvent(db, announcement, 'clone', null, 'draft', actor)
+    return { id: result.insertId, version: 1 }
+  })
 }
 
-async function archiveAnnouncement(id) {
-  await pool.execute("UPDATE announcements SET status='archived' WHERE id=?", [id])
-}
-async function deleteAnnouncement(id) {
-  await pool.execute('DELETE FROM announcements WHERE id=?', [id])
-}
-
-// 系统通知（4.3：sender_id=NULL → type=system；target_user_id 缺省时发给全部启用用户）
-// 2026-08-13：定向目标先查存在性，无效 id 返回 null（controller → 400），不再撞外键 500
-async function sendSystemNotification({ content, target_user_id }) {
-  if (target_user_id) {
-    const [[target]] = await pool.execute('SELECT id FROM users WHERE id=?', [target_user_id])
+async function publishAnnouncement(id, actor) {
+  return withTransaction(async (db) => {
+    // 固定 global 行是统一锁入口；任何发布都按相同顺序取锁。
+    const [[channel]] = await db.execute(
+      "SELECT current_announcement_id FROM announcement_channels WHERE channel='global' FOR UPDATE"
+    )
+    const [[target]] = await db.execute(
+      'SELECT id,title,content,status,version FROM announcements WHERE id=? AND deleted_at IS NULL FOR UPDATE', [id]
+    )
     if (!target) return null
-    await pool.execute('INSERT INTO notifications (receiver_id, sender_id, type, target_type, target_id, content) VALUES (?, NULL, ?, ?, NULL, ?)',
-      [target_user_id, 'system', 'system', content])
-    return 1
-  }
-  const [result] = await pool.execute(
-    "INSERT INTO notifications (receiver_id, sender_id, type, target_type, target_id, content) SELECT id, NULL, ?, ?, NULL, ? FROM users WHERE status = 1",
-    ['system', 'system', content]
+    if (target.status !== 'draft') return 'not_publishable'
+
+    if (channel && channel.current_announcement_id && channel.current_announcement_id !== target.id) {
+      const [[previous]] = await db.execute(
+        'SELECT id,title,content,status,version FROM announcements WHERE id=? FOR UPDATE',
+        [channel.current_announcement_id]
+      )
+      if (previous && previous.status === 'published') {
+        await db.execute("UPDATE announcements SET status='archived', archived_at=NOW() WHERE id=?", [previous.id])
+        await writeAnnouncementEvent(db, previous, 'archive', 'published', 'archived', actor)
+      }
+    }
+
+    await db.execute(
+      "UPDATE announcements SET status='published', published_at=NOW(), archived_at=NULL WHERE id=?", [target.id]
+    )
+    await db.execute(
+      "UPDATE announcement_channels SET current_announcement_id=? WHERE channel='global'", [target.id]
+    )
+    await writeAnnouncementEvent(db, target, 'publish', 'draft', 'published', actor)
+    return { id: target.id, version: target.version }
+  })
+}
+
+async function archiveAnnouncement(id, actor) {
+  return withTransaction(async (db) => {
+    const [[channel]] = await db.execute(
+      "SELECT current_announcement_id FROM announcement_channels WHERE channel='global' FOR UPDATE"
+    )
+    const [[target]] = await db.execute(
+      'SELECT id,title,content,status,version FROM announcements WHERE id=? AND deleted_at IS NULL FOR UPDATE', [id]
+    )
+    if (!target) return null
+    if (target.status !== 'published' || !channel || channel.current_announcement_id !== target.id) return 'not_published'
+    await db.execute("UPDATE announcements SET status='archived', archived_at=NOW() WHERE id=?", [id])
+    await db.execute("UPDATE announcement_channels SET current_announcement_id=NULL WHERE channel='global'")
+    await writeAnnouncementEvent(db, target, 'archive', 'published', 'archived', actor)
+    return { id: target.id }
+  })
+}
+
+async function deleteAnnouncement(id, actor) {
+  return withTransaction(async (db) => {
+    const [[target]] = await db.execute(
+      'SELECT id,title,content,status,version FROM announcements WHERE id=? AND deleted_at IS NULL FOR UPDATE', [id]
+    )
+    if (!target) return null
+    if (target.status !== 'draft') return 'not_deletable'
+    await db.execute("UPDATE announcements SET status='deleted', deleted_at=NOW() WHERE id=?", [id])
+    await writeAnnouncementEvent(db, target, 'delete', 'draft', 'deleted', actor)
+    return { id: target.id }
+  })
+}
+
+async function markAnnouncementRead(announcementId, version, userId) {
+  const [[active]] = await pool.execute(
+    `SELECT a.id FROM announcement_channels ac JOIN announcements a ON a.id=ac.current_announcement_id
+     WHERE ac.channel='global' AND a.id=? AND a.version=? AND a.status='published'`,
+    [announcementId, version]
   )
-  return result.affectedRows
+  if (!active) return false
+  await pool.execute(
+    `INSERT INTO announcement_reads (announcement_id,user_id,version) VALUES (?,?,?)
+     ON DUPLICATE KEY UPDATE read_at=VALUES(read_at)`,
+    [announcementId, userId, version]
+  )
+  return true
 }
 
 // 统计
@@ -193,4 +279,10 @@ async function getStats() {
   return { totalUsers, totalPosts, totalViews }
 }
 
-module.exports = { getPendingPosts, approvePost, rejectPost, getApplications, approveApplication, rejectApplication, getReports, resolveReport, getUserList, toggleBan, deleteUser, getAnnouncements, getLatestAnnouncement, createAnnouncement, updateAnnouncement, publishAnnouncement, archiveAnnouncement, deleteAnnouncement, sendSystemNotification, getStats }
+module.exports = {
+  getPendingPosts, getReviewDetail, approvePost, rejectPost,
+  getReports, resolveReport,
+  getAnnouncements, getLatestAnnouncement, createAnnouncement, updateAnnouncement, cloneAnnouncement,
+  publishAnnouncement, archiveAnnouncement, deleteAnnouncement, markAnnouncementRead,
+  getStats,
+}

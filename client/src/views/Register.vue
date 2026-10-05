@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { userApi } from '../api'
+import { errorMessage } from '../utils/errors'
 
 const router = useRouter()
 const route = useRoute()
 const form = ref({ username: '', password: '', confirmPassword: '' })
 const loading = ref(false)
 const errMsg = ref('')
+let alive = true
+onBeforeUnmount(() => { alive = false })
 
 async function handleRegister() {
+  if (loading.value || !alive) return
   errMsg.value = ''
   if (!form.value.username) {
     errMsg.value = '请输入用户名'
@@ -33,14 +37,15 @@ async function handleRegister() {
   }
 
   loading.value = true
+  const query = { ...route.query }
   try {
     await userApi.register({ username: form.value.username, password: form.value.password })
     // 透传 redirect：注册成功后登录，登录页继续消费回跳（守卫拦截链不断裂）
-    router.push({ path: '/login', query: route.query })
-  } catch (e: any) {
-    errMsg.value = e.response?.data?.message || '注册失败'
+    if (alive) await router.push({ path: '/login', query })
+  } catch (error: unknown) {
+    if (alive) errMsg.value = errorMessage(error, '注册失败')
   } finally {
-    loading.value = false
+    if (alive) loading.value = false
   }
 }
 </script>
@@ -48,37 +53,43 @@ async function handleRegister() {
 <template>
   <div class="auth-page">
     <div class="auth-card">
-      <h1 class="auth-logo" @click="router.push('/')">🔥 SoulsGuide</h1>
+      <h1 class="auth-logo"><router-link to="/">🔥 SoulsGuide</router-link></h1>
       <p class="auth-sub">创建你的猎人笔记</p>
 
-      <div class="auth-form">
-        <label class="auth-label">用户名</label>
-        <input v-model="form.username" class="auth-input" placeholder="2~20个字符" @keyup.enter="handleRegister" />
+      <form class="auth-form" @submit.prevent="handleRegister">
+        <label class="auth-label" for="register-username">用户名</label>
+        <input id="register-username" v-model="form.username" name="username" autocomplete="username" :disabled="loading" maxlength="50" class="auth-input" placeholder="2~50个字符" />
 
-        <label class="auth-label">密码</label>
+        <label class="auth-label" for="register-password">密码</label>
         <input
+          id="register-password"
           v-model="form.password"
+          name="password"
+          autocomplete="new-password"
+          :disabled="loading"
           class="auth-input"
           type="password"
           placeholder="至少6位"
-          @keyup.enter="handleRegister"
         />
 
-        <label class="auth-label">确认密码</label>
+        <label class="auth-label" for="register-confirm">确认密码</label>
         <input
+          id="register-confirm"
           v-model="form.confirmPassword"
+          name="confirmPassword"
+          autocomplete="new-password"
+          :disabled="loading"
           class="auth-input"
           type="password"
           placeholder="再次输入密码"
-          @keyup.enter="handleRegister"
         />
 
-        <p v-if="errMsg" class="auth-error">{{ errMsg }}</p>
+        <p v-if="errMsg" class="auth-error" role="alert">{{ errMsg }}</p>
 
-        <button class="auth-btn" :disabled="loading" @click="handleRegister">
+        <button type="submit" class="auth-btn" :disabled="loading">
           {{ loading ? '注册中...' : '注 册' }}
         </button>
-      </div>
+      </form>
 
       <p class="auth-switch">已有账号？<router-link to="/login">立即登录</router-link></p>
     </div>

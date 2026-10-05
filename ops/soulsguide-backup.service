@@ -1,0 +1,15 @@
+[Unit]
+Description=SoulsGuide consistent database and uploads backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/soulsguide
+Environment=COMPOSE_FILE=docker-compose.yml:docker-compose.prod-http.yml
+Environment=COMPOSE_PROJECT_NAME=soulsguide
+Environment=ALLOW_BACKUP_DOWNTIME=YES
+Environment=BACKUP_RETENTION_DAYS=14
+UMask=0077
+ExecStart=/bin/sh /opt/soulsguide/ops/backup.sh /opt/soulsguide-backups
+TimeoutStartSec=1h

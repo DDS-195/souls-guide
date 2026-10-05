@@ -1,5 +1,7 @@
 /* ====== SoulsGuide — 直接来自首页原型 ====== */
 :root {
+  color-scheme: dark;
+  --scrollbar-thumb: rgba(148, 163, 184, 0.35);
   --bg-deep: #0a0e14;
   --bg-main: #14191e;
   --bg-card: #1a1f26;
@@ -47,6 +49,12 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
 }
+/* 仅主题切换期间禁用颜色等过渡；正常悬停和交互动画不受影响。 */
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  transition: none !important;
+}
 a {
   color: var(--cyan);
   text-decoration: none;
@@ -73,7 +81,7 @@ svg {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--scrollbar-thumb);
   border-radius: 2px;
 }
 
@@ -236,6 +244,7 @@ svg {
 /* ====== MAIN ====== */
 .main {
   flex: 1;
+  min-width: 0;
   padding: 12px 14px 90px;
   min-height: 100vh;
   max-width: 100%;
@@ -246,6 +255,13 @@ svg {
     padding: 28px 32px 100px;
     max-width: none;
   }
+  /* Home has no desktop bottom navigation: match its bottom gutter to the top. */
+  .main.main--home {
+    padding-bottom: 28px;
+  }
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+  .main.main--home { padding: 20px 16px 24px; }
 }
 
 /* ====== ARTICLE FEED ====== */
@@ -359,13 +375,14 @@ svg {
   border-bottom: 1px solid var(--border-subtle);
 }
 .sub-back {
-  color: #94a3b8;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 1.2rem;
 }
 
 /* ====== 白天模式 ====== */
 :root.light-theme {
+  --scrollbar-thumb: rgba(107, 93, 79, 0.4);
   --bg-deep: #f5f0e8;
   --bg-main: #ede6d8;
   --bg-card: #e8e0d0;
@@ -507,9 +524,9 @@ svg {
   color: var(--text-muted) !important;
 }
 
-/* 全局按钮和输入框跟随主题（排除 TinyMCE 按钮：:not(.tox *)） */
-:root.light-theme button:not(.notify-tab):not(.game-tab):not(.action-item):not(.tox *) {
-  color: var(--text-primary);
-}
+/* 按钮由组件自身的语义颜色控制，避免覆盖危险操作及强调按钮的前景色。 */
+a:focus-visible { outline: 2px solid var(--amber); outline-offset: 4px; }
+.auth-logo a { color: inherit; text-decoration: none; }
+.header-home-link { color: inherit; text-decoration: none; }
 /* 2026-08-16 样式统一：以下「属性选择器匹配内联样式字符串」的 hack 段已删除——
  * 依赖它的硬编码内联色值（#1A1F26/#0D1117/transparent/rgba(255…)）已全部迁移为 scoped class + CSS 变量 */

@@ -1,0 +1,10 @@
+[Unit]
+Description=SoulsGuide read-only storage capacity check
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/soulsguide/ops/storage-check.sh
+TimeoutStartSec=60
+NoNewPrivileges=true
